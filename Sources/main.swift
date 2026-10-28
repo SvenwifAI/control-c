@@ -403,66 +403,81 @@ struct PickerView: View {
     @FocusState private var searchFocused: Bool
     @State private var hoveredID: UUID?
 
-    static let cornerRadius: CGFloat = 14
+    static let cardRadius: CGFloat = 24
+    /// Transparent margin around the glass so its shadow and edge highlights aren't clipped.
+    static let margin: CGFloat = 28
+    static let searchHeight: CGFloat = 44
 
     var body: some View {
+        // Liquid Glass (macOS 26): search capsule, round expand button and results card float
+        // as separate glass shapes that blend where they meet.
+        GlassEffectContainer(spacing: 10) {
+            VStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    searchField
+                    expandButton
+                }
+                card
+            }
+        }
+        // Lifts the glass off light backgrounds, where its edge alone disappears.
+        .shadow(color: .black.opacity(0.16), radius: 18, y: 8)
+        .padding(Self.margin)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onAppear { searchFocused = true }
+        .onChange(of: model.focusToken) { searchFocused = true }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 9) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.secondary)
+            TextField("Zoek in klembord", text: $model.query)
+                .textFieldStyle(.plain)
+                .font(.system(size: model.expanded ? 18 : 16))
+                .focused($searchFocused)
+        }
+        .padding(.horizontal, 16)
+        .frame(height: Self.searchHeight)
+        .glassSurface(Capsule())
+    }
+
+    private var expandButton: some View {
+        Button { model.expanded.toggle() } label: {
+            Image(systemName: model.expanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: Self.searchHeight, height: Self.searchHeight)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .glassSurface(Circle(), interactive: true)
+        .help(model.expanded ? "Verkleinen (tab)" : "Vergroten met voorbeeld (tab)")
+    }
+
+    private var card: some View {
         let items = model.filtered
-        VStack(spacing: 0) {
-            searchBar
+        return VStack(spacing: 0) {
             kindBar
-            Divider().opacity(0.5)
             if items.isEmpty {
                 emptyState
             } else if model.expanded {
                 HStack(spacing: 0) {
                     list(items).frame(width: 320)
-                    Divider().opacity(0.5)
+                    Divider().opacity(0.4).padding(.vertical, 8)
                     PreviewPane(item: model.selected, store: store)
                 }
             } else {
                 list(items)
             }
-            if model.expanded {
-                Divider().opacity(0.5)
-                footer
-            }
+            if model.expanded { footer }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .overlay(alignment: .bottom) { banner.padding(.bottom, model.expanded ? 40 : 6) }
+        .overlay(alignment: .bottom) { banner.padding(.bottom, model.expanded ? 40 : 8) }
         .animation(.easeOut(duration: 0.15), value: store.lastDeleted?.item.id)
         .animation(.easeOut(duration: 0.15), value: model.confirmingClear)
-        .background(VisualEffect(material: .menu))
-        .clipShape(RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5)
-        )
-        .onAppear { searchFocused = true }
-        .onChange(of: model.focusToken) { searchFocused = true }
-    }
-
-    private var searchBar: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: model.expanded ? 15 : 13, weight: .medium))
-                .foregroundStyle(.secondary)
-            TextField("Zoek in klembord", text: $model.query)
-                .textFieldStyle(.plain)
-                .font(.system(size: model.expanded ? 16 : 14))
-                .focused($searchFocused)
-            Button { model.expanded.toggle() } label: {
-                Image(systemName: model.expanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 22, height: 22)
-                    .background(Circle().fill(Color.primary.opacity(0.07)))
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .help(model.expanded ? "Verkleinen (tab)" : "Vergroten met voorbeeld (tab)")
-        }
-        .padding(.horizontal, 12)
-        .frame(height: model.expanded ? 46 : 38)
+        .glassSurface(RoundedRectangle(cornerRadius: Self.cardRadius, style: .continuous))
     }
 
     /// Scope bar: "Alles" plus one capsule per kind present. Glyph-only when compact.
@@ -472,8 +487,9 @@ struct PickerView: View {
             ForEach(model.availableKinds, id: \.self) { scopeButton($0) }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 8)
-        .padding(.bottom, 6)
+        .padding(.horizontal, 10)
+        .padding(.top, 10)
+        .padding(.bottom, 4)
     }
 
     private func scopeButton(_ kind: ClipKind?) -> some View {
@@ -530,7 +546,8 @@ struct PickerView: View {
                             }
                     }
                 }
-                .padding(5)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
             }
             .scrollIndicators(model.expanded ? .automatic : .never)
             .onChange(of: model.selection) {
@@ -625,6 +642,14 @@ struct PickerView: View {
     }
 }
 
+extension View {
+    /// Liquid Glass with a light backing so text stays readable over busy windows.
+    func glassSurface<S: Shape>(_ shape: S, interactive: Bool = false) -> some View {
+        background(shape.fill(Color(nsColor: .windowBackgroundColor).opacity(0.5)))
+            .glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
+    }
+}
+
 struct BannerBar<Content: View>: View {
     @ViewBuilder let content: Content
 
@@ -633,15 +658,7 @@ struct BannerBar<Content: View>: View {
             .font(.system(size: 12))
             .padding(.horizontal, 12)
             .frame(height: 32)
-            .background(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(.regularMaterial)
-                    .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5)
-            )
+            .glassEffect(.regular, in: Capsule())
             .padding(.horizontal, 8)
             .transition(.move(edge: .bottom).combined(with: .opacity))
     }
@@ -704,10 +721,10 @@ struct ClipRow: View {
             }
         }
         .padding(.horizontal, 8)
-        .frame(height: compact ? 26 : 44)
+        .frame(height: compact ? 28 : 44)
         .foregroundStyle(selected ? Color.white : Color.primary)
         .background(
-            RoundedRectangle(cornerRadius: compact ? 6 : 9, style: .continuous)
+            RoundedRectangle(cornerRadius: compact ? 8 : 12, style: .continuous)
                 .fill(selected ? Color.accentColor : Color.clear)
         )
     }
@@ -847,7 +864,7 @@ final class ClipPanel: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
         backgroundColor = .clear
         isOpaque = false
-        hasShadow = true
+        hasShadow = false // the glass draws its own
         hidesOnDeactivate = false
         animationBehavior = .none
     }
@@ -929,9 +946,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var anchor = NSRect.zero
 
     private var panelSize: CGSize {
-        if model.expanded { return CGSize(width: 720, height: 440) }
+        let m = PickerView.margin * 2
+        let top = PickerView.searchHeight + 8
+        if model.expanded { return CGSize(width: 740 + m, height: top + 420 + m) }
         let rows = CGFloat(min(max(store.items.count, 3), 10))
-        return CGSize(width: 340, height: 38 + 28 + 1 + 10 + rows * 26)
+        return CGSize(width: 360 + m, height: top + 36 + rows * 28 + 8 + m)
     }
 
     /// Places the panel just below the anchor, or above it when there is no room, inside the visible screen.
@@ -939,8 +958,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let size = panelSize
         let screen = NSScreen.screens.first { NSMouseInRect(anchor.origin, $0.frame, false) } ?? NSScreen.main
         guard let vf = screen?.visibleFrame else { return }
-        var x = anchor.minX - 10
-        var y = anchor.minY - 6 - size.height
+        var x = anchor.minX - 10 - PickerView.margin
+        var y = anchor.minY - 6 + PickerView.margin - size.height
         if y < vf.minY { y = anchor.maxY + 6 }
         x = min(max(x, vf.minX + 8), vf.maxX - size.width - 8)
         y = min(max(y, vf.minY + 8), vf.maxY - size.height - 8)
