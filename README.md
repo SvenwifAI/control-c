@@ -18,7 +18,7 @@ cd Control-C
 ./build.sh
 ```
 
-`build.sh` bouwt de app uit de broncode in `Sources/main.swift`, zet hem in `/Applications/ControlC.app` en start hem. Er wordt niets gedownload.
+`build.sh` bouwt de app uit de broncode in `Sources/`, zet hem in `/Applications/ControlC.app` en start hem. Er wordt niets gedownload.
 
 **Automatisch plakken:** de eerste keer vraagt macOS om toegang via Systeeminstellingen → Privacy en beveiliging → **Toegankelijkheid**. Zet Control+C daar aan. Zonder die toegang wordt een item alleen gekopieerd en plak je zelf met ⌘V. De app opent dan ook bij je muis in plaats van bij je tekstcursor.
 
