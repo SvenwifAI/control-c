@@ -1356,7 +1356,8 @@ struct ClipRow: View {
     let compact: Bool
     let copied: Bool
     let hovered: Bool
-    let store: ClipStore
+    /// Observed, so a thumbnail that finishes loading in the background shows up right away.
+    @ObservedObject var store: ClipStore
 
     private var iconSize: CGFloat { compact ? 20 : 28 }
 
@@ -1472,7 +1473,8 @@ struct KindIcon: View {
 
 struct PreviewPane: View {
     let item: ClipItem?
-    let store: ClipStore
+    /// Observed, so the image appears as soon as it has loaded, also the first time it is shown.
+    @ObservedObject var store: ClipStore
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
