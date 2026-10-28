@@ -34,6 +34,7 @@ cd Control-C
 | `↩` of dubbelklik | Plakken in de app waar je was |
 | `⇧↩` of één klik | Alleen kopiëren |
 | `⌘1` … `⌘9` | Item 1 t/m 9 meteen plakken |
+| `⌘←` `⌘→` of de filterknoppen | Alleen tekst, links, afbeeldingen, code, kleuren of e-mailadressen |
 | `tab` of het pijltjesknopje | Grote weergave met voorbeeld |
 | `⌘⌫`, × of rechtermuisklik | Item verwijderen |
 | `⌘Z` | Verwijderen ongedaan maken |
