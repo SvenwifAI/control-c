@@ -5,6 +5,7 @@ import SwiftUI
 import Carbon.HIToolbox
 import ServiceManagement
 import CryptoKit
+import Vision
 
 // MARK: - Model
 
@@ -16,6 +17,8 @@ struct ClipItem: Identifiable, Codable, Equatable {
     var date = Date()
     var appBundleID: String?
     var appName: String?
+    /// Text recognized in an image; "" once recognition ran and found nothing.
+    var ocrText: String?
 
     var isImage: Bool { imageFile != nil }
 
@@ -44,7 +47,11 @@ struct ClipItem: Identifiable, Codable, Equatable {
     }
 
     var oneLine: String {
-        guard let text else { return "Afbeelding" }
+        guard let text else {
+            guard let ocr = ocrText?.split(whereSeparator: \.isWhitespace).joined(separator: " "), !ocr.isEmpty
+            else { return "Afbeelding" }
+            return "Afbeelding · \(ocr.prefix(200))"
+        }
         let collapsed = text.prefix(300).split(whereSeparator: \.isWhitespace).joined(separator: " ")
         return collapsed.isEmpty ? "(witruimte)" : collapsed
     }
@@ -100,8 +107,6 @@ enum ClipKind: CaseIterable {
 }
 
 final class ClipStore: ObservableObject {
-    static let maxItems = 60
-    static let maxAge: TimeInterval = 7 * 24 * 3600
     static let maxTextBytes = 1_000_000
     static let maxImageBytes = 20_000_000
 
@@ -137,6 +142,7 @@ final class ClipStore: ObservableObject {
 
     func start() {
         poll()
+        items.filter { $0.isImage && $0.ocrText == nil }.forEach(recognizeText(in:))
         let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.poll() }
         RunLoop.main.add(t, forMode: .common)
         timer = t
@@ -149,12 +155,33 @@ final class ClipStore: ObservableObject {
 
     /// Drops items not copied or used for `maxAge`, including their image files.
     func expireOldItems() {
-        let cutoff = Date().addingTimeInterval(-Self.maxAge)
+        let cutoff = Date().addingTimeInterval(-Settings.shared.maxAge)
         let expired = items.filter { $0.date < cutoff }
         guard !expired.isEmpty else { return }
         items.removeAll { $0.date < cutoff }
         expired.forEach(removeFile(of:))
         save()
+    }
+
+    private let ocrQueue = DispatchQueue(label: "ControlC.ocr", qos: .utility)
+
+    /// Reads the text in a copied image with Apple's on-device Vision, so screenshots become searchable.
+    func recognizeText(in item: ClipItem) {
+        guard Settings.shared.recognizeText, let url = fileURL(item.imageFile) else { return }
+        let id = item.id
+        ocrQueue.async {
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            request.usesLanguageCorrection = true
+            request.recognitionLanguages = ["nl-NL", "en-US"]
+            try? VNImageRequestHandler(url: url).perform([request])
+            let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let i = self.items.firstIndex(where: { $0.id == id }) else { return }
+                self.items[i].ocrText = text
+                self.save()
+            }
+        }
     }
 
     /// Only files this app wrote itself ("<24 hex chars>.png"); rejects anything else, such as
@@ -174,6 +201,7 @@ final class ClipStore: ObservableObject {
         if let types = pb.types, types.contains(where: { Self.ignoredTypes.contains($0.rawValue) }) { return }
 
         let app = NSWorkspace.shared.frontmostApplication
+        if let id = app?.bundleIdentifier, Settings.shared.excludedApps.contains(id) { return }
         if let s = pb.string(forType: .string), !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             guard s.utf8.count <= Self.maxTextBytes else { return }
             if let i = items.firstIndex(where: { $0.text == s }) { promote(at: i); return }
@@ -183,13 +211,25 @@ final class ClipStore: ObservableObject {
             if let i = items.firstIndex(where: { $0.imageHash == hash }) { promote(at: i); return }
             let name = "\(hash.prefix(24)).png"
             guard let url = fileURL(name), (try? png.write(to: url)) != nil else { return }
-            insert(ClipItem(imageFile: name, imageHash: hash, appBundleID: app?.bundleIdentifier, appName: app?.localizedName))
+            let item = ClipItem(imageFile: name, imageHash: hash, appBundleID: app?.bundleIdentifier, appName: app?.localizedName)
+            insert(item)
+            recognizeText(in: item)
         }
     }
 
     private func insert(_ item: ClipItem) {
         items.insert(item, at: 0)
-        while items.count > Self.maxItems { removeFile(of: items.removeLast()) }
+        while items.count > Settings.shared.maxItems { removeFile(of: items.removeLast()) }
+        save()
+    }
+
+    /// Re-applies the item limit and retention after they change in Settings.
+    func applyLimits() {
+        expireOldItems()
+        guard items.count > Settings.shared.maxItems else { return }
+        let removed = items[Settings.shared.maxItems...]
+        items.removeLast(items.count - Settings.shared.maxItems)
+        removed.forEach(removeFile(of:))
         save()
     }
 
@@ -325,7 +365,7 @@ final class PickerModel: ObservableObject {
         let items = kindFilter.map { kind in store.items.filter { $0.kind == kind } } ?? store.items
         guard !q.isEmpty else { return items }
         return items.filter {
-            ($0.text ?? "afbeelding image").localizedCaseInsensitiveContains(q)
+            ($0.text ?? "afbeelding image \($0.ocrText ?? "")").localizedCaseInsensitiveContains(q)
                 || ($0.appName ?? "").localizedCaseInsensitiveContains(q)
         }
     }
@@ -540,6 +580,12 @@ struct PickerView: View {
                             .contextMenu {
                                 Button("Plakken") { model.onChoose(item, true) }
                                 Button("Kopiëren") { copy(item, at: idx) }
+                                if let ocr = item.ocrText, !ocr.isEmpty {
+                                    Button("Kopieer tekst uit afbeelding") {
+                                        NSPasteboard.general.clearContents()
+                                        NSPasteboard.general.setString(ocr, forType: .string)
+                                    }
+                                }
                                 Divider()
                                 Button("Verwijderen") { model.delete(item) }
                                 Button("Alles wissen…") { model.confirmingClear = true }
@@ -799,6 +845,10 @@ struct PreviewPane: View {
                         meta("Inhoud", "\(t.count) tekens · \(lines) \(lines == 1 ? "regel" : "regels")")
                     } else if let img = store.image(for: item) {
                         meta("Afmetingen", "\(Int(img.size.width)) × \(Int(img.size.height))")
+                        if let ocr = item.ocrText, !ocr.isEmpty {
+                            let words = ocr.split(whereSeparator: \.isWhitespace).count
+                            meta("Tekst", "\(words) woorden herkend · rechtsklik om te kopiëren")
+                        }
                     }
                 }
                 .padding(.horizontal, 18)
@@ -882,15 +932,27 @@ final class HotKey {
     private var handler: EventHandlerRef?
     private let action: () -> Void
 
-    init(keyCode: Int, modifiers: Int, action: @escaping () -> Void) {
+    init(action: @escaping () -> Void) {
         self.action = action
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
         InstallEventHandler(GetApplicationEventTarget(), { _, _, userData in
             Unmanaged<HotKey>.fromOpaque(userData!).takeUnretainedValue().action()
             return noErr
         }, 1, &spec, Unmanaged.passUnretained(self).toOpaque(), &handler)
+    }
+
+    /// Replaces the current shortcut; false when another app already owns this combination.
+    @discardableResult
+    func register(_ shortcut: Shortcut) -> Bool {
+        unregister()
         let id = EventHotKeyID(signature: OSType(0x434C_4950), id: 1) // 'CLIP'
-        RegisterEventHotKey(UInt32(keyCode), UInt32(modifiers), id, GetApplicationEventTarget(), 0, &ref)
+        return RegisterEventHotKey(UInt32(shortcut.keyCode), UInt32(shortcut.carbonModifiers), id,
+                                   GetApplicationEventTarget(), 0, &ref) == noErr
+    }
+
+    func unregister() {
+        if let ref { UnregisterEventHotKey(ref) }
+        ref = nil
     }
 }
 
@@ -899,6 +961,9 @@ final class HotKey {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate {
     let store = ClipStore()
     lazy var model = PickerModel(store: store)
+    let settings = Settings.shared
+    lazy var settingsWindow = SettingsWindowController { [weak self] in self?.clearHistory() }
+    let openItem = NSMenuItem(title: "Open klembord", action: #selector(openFromMenu), keyEquivalent: "")
     var panel: ClipPanel!
     var hotKey: HotKey?
     var statusItem: NSStatusItem!
@@ -915,17 +980,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         model.onChoose = { [weak self] item, paste in self?.choose(item, paste: paste) }
         model.onResize = { [weak self] in self?.layoutPanel() }
 
-        hotKey = HotKey(keyCode: kVK_Return, modifiers: cmdKey) { [weak self] in self?.toggle() }
+        hotKey = HotKey { [weak self] in self?.toggle() }
+        registerShortcut()
+        settings.onShortcutChange = { [weak self] in
+            if self?.settings.isRecording == false { self?.registerShortcut() }
+        }
+        settings.onRecordingChange = { [weak self] recording in
+            if recording { self?.hotKey?.unregister() } else { self?.registerShortcut() }
+        }
+        settings.onLimitsChange = { [weak self] in self?.store.applyLimits() }
         setupStatusItem()
 
         #if SCREENSHOT_TEST
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.show() }
+        #endif
+        #if SETTINGS_TEST
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.openSettings() }
         #endif
 
         if !AXIsProcessTrusted(), !UserDefaults.standard.bool(forKey: "askedAccessibility") {
             UserDefaults.standard.set(true, forKey: "askedAccessibility")
             requestAccessibility()
         }
+    }
+
+    func registerShortcut() {
+        settings.shortcutTaken = !(hotKey?.register(settings.shortcut) ?? true)
+    }
+
+    @objc func openSettings() {
+        hide()
+        settingsWindow.show()
     }
 
     // MARK: Panel
@@ -1004,6 +1089,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         switch Int(e.keyCode) {
         case kVK_Escape:
             if model.confirmingClear { model.confirmingClear = false } else { hide() }
+        case kVK_ANSI_Comma where cmd:
+            openSettings()
         case kVK_ANSI_Z where cmd:
             model.undoDelete()
         case kVK_UpArrow:
@@ -1053,7 +1140,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
         let menu = NSMenu()
         menu.delegate = self
-        menu.addItem(withTitle: "Open klembord   ⌘↩", action: #selector(openFromMenu), keyEquivalent: "")
+        menu.addItem(openItem)
+        menu.addItem(withTitle: "Instellingen…", action: #selector(openSettings), keyEquivalent: ",")
         menu.addItem(.separator())
         menu.addItem(loginItem)
         menu.addItem(pasteItem)
@@ -1065,6 +1153,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
+        openItem.title = "Open klembord   \(settings.shortcut.display)"
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         pasteItem.isHidden = AXIsProcessTrusted()
     }

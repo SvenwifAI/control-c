@@ -22,7 +22,7 @@ cd Control-C
 
 **Automatisch plakken:** de eerste keer vraagt macOS om toegang via Systeeminstellingen → Privacy en beveiliging → **Toegankelijkheid**. Zet Control+C daar aan. Zonder die toegang wordt een item alleen gekopieerd en plak je zelf met ⌘V. De app opent dan ook bij je muis in plaats van bij je tekstcursor.
 
-**Starten bij inloggen:** klik op het klembord-icoon in de menubalk en kies *Start bij inloggen*.
+**Instellingen:** klik op het klembord-icoon in de menubalk en kies *Instellingen…*, of druk op `⌘,` in de popup. Daar kies je je eigen sneltoets, hoeveel items hij bewaart en hoe lang, welke apps hij moet negeren, en of hij moet starten bij inloggen.
 
 ## Gebruik
 
@@ -39,27 +39,25 @@ cd Control-C
 | `⌘⌫`, × of rechtermuisklik | Item verwijderen |
 | `⌘Z` | Verwijderen ongedaan maken |
 | `⇧⌘⌫` | Alles wissen (vraagt eerst om bevestiging) |
+| `⌘,` | Instellingen |
 | `esc` | Sluiten |
+
+**Zoeken in screenshots:** in gekopieerde afbeeldingen wordt de tekst herkend, zodat je daar ook in kunt zoeken. Met een rechtermuisklik op een afbeelding kopieer je die tekst. Dit gebeurt met Apple Vision op je eigen Mac. Uitzetten kan in Instellingen.
 
 ## Privacy en veiligheid
 
 - **Alles blijft op je Mac.** De app maakt geen internetverbinding.
 - **Wachtwoorden uit wachtwoordmanagers** (1Password, iCloud-sleutelhanger, Bitwarden en andere apps die hun kopieën als geheim markeren) worden niet opgeslagen.
 - **Je geschiedenis staat in** `~/Library/Application Support/ControlC/`. Alleen jouw gebruikersaccount kan die map lezen en hij gaat niet mee in Time Machine-backups.
-- **Items verlopen na 7 dagen.** Er worden hooguit 60 items bewaard. Teksten groter dan 1 MB en afbeeldingen groter dan 20 MB worden niet bewaard.
+- **Items verlopen na 7 dagen** zonder gebruik, en er worden hooguit 60 items bewaard. Beide kun je aanpassen in Instellingen (1, 7 of 30 dagen; 20 tot 200 items). Teksten groter dan 1 MB en afbeeldingen groter dan 20 MB worden niet bewaard.
+- **Apps uitsluiten:** wat je kopieert in apps die je in Instellingen uitsluit, wordt nooit bewaard.
 - **Let op:** wat je zonder wachtwoordmanager kopieert, bijvoorbeeld een wachtwoord uit een notitie of een 2FA-code, komt wel in de geschiedenis. Verwijder zo'n item met `⌘⌫`.
 - De toestemming voor Toegankelijkheid gebruikt de app alleen om je tekstcursor te vinden en om ⌘V te versturen.
 - **Gebruik alleen een versie die je zelf hebt gebouwd.** Neem geen kant-en-klare `.app` van iemand anders over: die kun je niet controleren en hij krijgt wel toegang tot je klembord en tot Toegankelijkheid.
 
 ## Sneltoets aanpassen
 
-⌘↩ werkt hierdoor niet meer in andere apps, zoals Slack, Teams of Claude, waar je er normaal berichten mee verstuurt. Wil je een andere sneltoets, pas dan deze regel aan in `Sources/main.swift`:
-
-```swift
-hotKey = HotKey(keyCode: kVK_Return, modifiers: cmdKey) { ... }
-```
-
-Bijvoorbeeld `kVK_ANSI_V, modifiers: cmdKey | shiftKey` voor ⌘⇧V. Draai daarna `./build.sh` opnieuw.
+⌘↩ verstuurt ook berichten in apps als Slack, Teams en Claude. Kies in Instellingen een andere combinatie: klik op de sneltoets en druk de nieuwe in, bijvoorbeeld ⌥V of ⌘⇧V.
 
 ## Toestemming na elke nieuwe versie (optioneel)
 

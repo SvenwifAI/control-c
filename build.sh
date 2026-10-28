@@ -13,7 +13,7 @@ if ! command -v swiftc >/dev/null; then
 fi
 
 swiftc -O -swift-version 5 -target "$(uname -m)-apple-macos26.0" \
-  Sources/main.swift -o "$APP/Contents/MacOS/ControlC"
+  Sources/*.swift -o "$APP/Contents/MacOS/ControlC"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -24,6 +24,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleName</key><string>Control+C</string>
   <key>CFBundleDisplayName</key><string>Control+C</string>
   <key>CFBundleExecutable</key><string>ControlC</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
   <key>CFBundleVersion</key><string>1</string>
@@ -33,6 +34,9 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
+
+mkdir -p "$APP/Contents/Resources"
+cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 
 # A fixed self-signed identity keeps the Accessibility permission valid across rebuilds;
 # ad-hoc signing (-) would make macOS forget it every time.
