@@ -343,6 +343,7 @@ final class PickerModel: ObservableObject {
     let store: ClipStore
     var onChoose: (ClipItem, Bool) -> Void = { _, _ in }
     var onResize: () -> Void = {}
+    var onOpenSettings: () -> Void = {}
 
     init(store: ClipStore) { self.store = store }
 
@@ -456,6 +457,7 @@ struct PickerView: View {
                 HStack(spacing: 8) {
                     searchField
                     expandButton
+                    settingsButton
                 }
                 card
             }
@@ -494,6 +496,19 @@ struct PickerView: View {
         .buttonStyle(.plain)
         .glassSurface(Circle(), interactive: true)
         .help(model.expanded ? "Verkleinen (tab)" : "Vergroten met voorbeeld (tab)")
+    }
+
+    private var settingsButton: some View {
+        Button { model.onOpenSettings() } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: Self.searchHeight, height: Self.searchHeight)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .glassSurface(Circle(), interactive: true)
+        .help("Instellingen (⌘,)")
     }
 
     private var card: some View {
@@ -979,6 +994,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         panel.keyHandler = { [weak self] in self?.handleKey($0) ?? false }
         model.onChoose = { [weak self] item, paste in self?.choose(item, paste: paste) }
         model.onResize = { [weak self] in self?.layoutPanel() }
+        model.onOpenSettings = { [weak self] in self?.openSettings() }
 
         hotKey = HotKey { [weak self] in self?.toggle() }
         registerShortcut()
