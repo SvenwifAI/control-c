@@ -36,10 +36,12 @@ struct ClipItem: Identifiable, Codable, Equatable {
     var hasFormatting: Bool { rtf != nil || html != nil }
     var fileURLs: [URL] { (filePaths ?? []).map { URL(fileURLWithPath: $0) } }
 
-    /// The first file when it is an image, for thumbnails and text recognition.
+    /// The first file when it is an image of at most 20 MB, for thumbnails, preview and text recognition.
+    /// Bigger files get the Finder icon, so a huge TIFF can never stall the app.
     var imageFileURL: URL? {
-        guard let url = fileURLs.first, UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true
-        else { return nil }
+        guard let url = fileURLs.first, UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true,
+              let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
+              size <= ClipStore.maxImageBytes else { return nil }
         return url
     }
 
@@ -145,7 +147,8 @@ enum ClipKind: CaseIterable {
 final class ClipStore: ObservableObject {
     static let maxTextBytes = 1_000_000
     static let maxImageBytes = 20_000_000
-    static let maxRichBytes = 2_000_000
+    /// Per format; every save rewrites history.json, so formatting must stay small.
+    static let maxRichBytes = 500_000
 
     @Published private(set) var items: [ClipItem] = []
     let dir: URL
