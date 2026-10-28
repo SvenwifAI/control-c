@@ -30,9 +30,12 @@ struct ClipItem: Identifiable, Codable, Equatable {
     /// The formatted versions of copied text, so pasting keeps bold, links and colors.
     var rtf: Data?
     var html: Data?
+    /// Set for recognized secrets: they live in memory until this moment and are never written to disk.
+    var sensitiveUntil: Date?
 
     var isImage: Bool { imageFile != nil }
     var isFile: Bool { filePaths?.isEmpty == false }
+    var isSensitive: Bool { sensitiveUntil != nil }
     var hasFormatting: Bool { rtf != nil || html != nil }
     var fileURLs: [URL] { (filePaths ?? []).map { URL(fileURLWithPath: $0) } }
 
@@ -47,11 +50,13 @@ struct ClipItem: Identifiable, Codable, Equatable {
 
     /// Everything search looks at besides the app name.
     var searchText: String {
+        if isSensitive { return "" } // a secret must not be findable by guessing its characters
         if isFile { return fileURLs.map(\.lastPathComponent).joined(separator: " ") + " " + (ocrText ?? "") }
         return text ?? "afbeelding image screenshot \(ocrText ?? "")"
     }
 
     var kind: ClipKind {
+        if isSensitive { return .secret }
         if isFile { return .file }
         guard let text else { return .image }
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -77,6 +82,7 @@ struct ClipItem: Identifiable, Codable, Equatable {
     }
 
     var oneLine: String {
+        if isSensitive { return String(repeating: "•", count: min(max(text?.count ?? 8, 6), 14)) }
         if isFile {
             let names = fileURLs.map(\.lastPathComponent)
             return names.count == 1 ? names[0] : names[0] + " " + L("+ %d more", names.count - 1)
@@ -93,7 +99,7 @@ struct ClipItem: Identifiable, Codable, Equatable {
 
 /// What a clip is, each with its own SF Symbol and system color.
 enum ClipKind: CaseIterable {
-    case text, link, image, file, code, color, email
+    case text, link, image, file, code, color, email, secret
 
     var label: String {
         switch self {
@@ -104,6 +110,7 @@ enum ClipKind: CaseIterable {
         case .color: L("Colors")
         case .email: L("Email")
         case .file: L("Files")
+        case .secret: L("Secrets")
         }
     }
 
@@ -116,6 +123,7 @@ enum ClipKind: CaseIterable {
         case .color: L("Color")
         case .email: L("Email address")
         case .file: L("File")
+        case .secret: L("Possible password")
         }
     }
 
@@ -128,6 +136,7 @@ enum ClipKind: CaseIterable {
         case .color: "paintpalette.fill"
         case .email: "envelope.fill"
         case .file: "doc.fill"
+        case .secret: "key.fill"
         }
     }
 
@@ -140,6 +149,7 @@ enum ClipKind: CaseIterable {
         case .color: Color(nsColor: .systemPink)
         case .email: Color(nsColor: .systemTeal)
         case .file: Color(nsColor: .systemIndigo)
+        case .secret: Color(nsColor: .systemGray)
         }
     }
 }
@@ -152,6 +162,8 @@ final class ClipStore: ObservableObject {
 
     @Published private(set) var items: [ClipItem] = []
     let dir: URL
+    /// Nil when the Keychain refused: nothing is then written to disk at all.
+    private var key: SymmetricKey?
     private var lastChange = -1
     private var timer: Timer?
     private let imageCache = NSCache<NSString, NSImage>()
@@ -178,11 +190,14 @@ final class ClipStore: ObservableObject {
         values.isExcludedFromBackup = true
         var excluded = dir
         try? excluded.setResourceValues(values)
+        key = Vault.loadKey()
         load()
         expireOldItems()
     }
 
-    private var historyURL: URL { dir.appendingPathComponent("history.json") }
+    private var historyURL: URL { dir.appendingPathComponent("history.enc") }
+    /// Plain JSON from versions before encryption; migrated and removed on first launch.
+    private var legacyHistoryURL: URL { dir.appendingPathComponent("history.json") }
 
     func start() {
         #if DEMO
@@ -214,14 +229,20 @@ final class ClipStore: ObservableObject {
 
     /// Reads the text in a copied image with Apple's on-device Vision, so screenshots become searchable.
     func recognizeText(in item: ClipItem) {
-        guard Settings.shared.recognizeText, let url = fileURL(item.imageFile) ?? item.imageFileURL else { return }
+        guard Settings.shared.recognizeText else { return }
+        let handler: VNImageRequestHandler
+        if item.imageFile != nil, let data = imageData(item.imageFile) {
+            handler = VNImageRequestHandler(data: data)
+        } else if let url = item.imageFileURL {
+            handler = VNImageRequestHandler(url: url)
+        } else { return }
         let id = item.id
         ocrQueue.async {
             let request = VNRecognizeTextRequest()
             request.recognitionLevel = .accurate
             request.usesLanguageCorrection = true
             request.recognitionLanguages = ["nl-NL", "en-US"]
-            try? VNImageRequestHandler(url: url).perform([request])
+            try? handler.perform([request])
             let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
             DispatchQueue.main.async { [weak self] in
                 guard let self, let i = self.items.firstIndex(where: { $0.id == id }) else { return }
@@ -231,15 +252,44 @@ final class ClipStore: ObservableObject {
         }
     }
 
-    /// Only files this app wrote itself ("<24 hex chars>.png"); rejects anything else, such as
-    /// a tampered history.json pointing at "../../somewhere".
+    /// Only files this app wrote itself ("<24 hex chars>.enc", or ".png" from before encryption);
+    /// rejects anything else, such as a tampered history pointing at "../../somewhere".
     private func fileURL(_ name: String?) -> URL? {
-        guard let name, name.count == 28, name.hasSuffix(".png"),
+        guard let name, name.count == 28, name.hasSuffix(".enc") || name.hasSuffix(".png"),
               name.dropLast(4).allSatisfy({ $0.isHexDigit }) else { return nil }
         return dir.appendingPathComponent(name)
     }
 
+    /// The decrypted bytes of a stored image.
+    private func imageData(_ name: String?) -> Data? {
+        guard let url = fileURL(name), let raw = try? Data(contentsOf: url) else { return nil }
+        if url.pathExtension == "png" { return raw }
+        guard let key else { return nil }
+        return Vault.open(raw, with: key)
+    }
+
+    /// Writes encrypted with owner-only permissions; returns false (and writes nothing) without a key.
+    @discardableResult
+    private func writeSealed(_ data: Data, to url: URL) -> Bool {
+        guard let key, let sealed = Vault.seal(data, with: key),
+              (try? sealed.write(to: url, options: .atomic)) != nil else { return false }
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        return true
+    }
+
+    private var nextSecretSweep = Date()
+
+    /// Removes recognized secrets whose few minutes are up.
+    private func sweepSecrets() {
+        nextSecretSweep = Date().addingTimeInterval(5)
+        let now = Date()
+        if items.contains(where: { ($0.sensitiveUntil ?? .distantFuture) < now }) {
+            items.removeAll { ($0.sensitiveUntil ?? .distantFuture) < now }
+        }
+    }
+
     private func poll() {
+        if Date() >= nextSecretSweep { sweepSecrets() }
         let pb = NSPasteboard.general
         guard pb.changeCount != lastChange else { return }
         lastChange = pb.changeCount
@@ -259,6 +309,21 @@ final class ClipStore: ObservableObject {
             recognizeText(in: item)
         } else if let s = pb.string(forType: .string), !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             guard s.utf8.count <= Self.maxTextBytes else { return }
+            if Settings.shared.detectSecrets, Secrets.looksSecret(s) {
+                // Kept in memory for a few minutes, masked, never saved; formatting is dropped.
+                let until = Date().addingTimeInterval(Secrets.lifetime)
+                if let i = items.firstIndex(where: { $0.text == s }) {
+                    items[i].sensitiveUntil = until
+                    items[i].rtf = nil
+                    items[i].html = nil
+                    promote(at: i)
+                    save() // drops it from disk if it was stored before
+                    return
+                }
+                insert(ClipItem(text: s, appBundleID: app?.bundleIdentifier, appName: app?.localizedName,
+                                sensitiveUntil: until))
+                return
+            }
             let rtf = pb.data(forType: .rtf).flatMap { $0.count <= Self.maxRichBytes ? $0 : nil }
             let html = pb.data(forType: .html).flatMap { $0.count <= Self.maxRichBytes ? $0 : nil }
             if let i = items.firstIndex(where: { $0.text == s }) {
@@ -271,8 +336,8 @@ final class ClipStore: ObservableObject {
         } else if let img = NSImage(pasteboard: pb), let png = img.pngData, png.count <= Self.maxImageBytes {
             let hash = SHA256.hash(data: png).map { String(format: "%02x", $0) }.joined()
             if let i = items.firstIndex(where: { $0.imageHash == hash }) { promote(at: i); return }
-            let name = "\(hash.prefix(24)).png"
-            guard let url = fileURL(name), (try? png.write(to: url)) != nil else { return }
+            let name = "\(hash.prefix(24)).enc"
+            guard let url = fileURL(name), writeSealed(png, to: url) else { return }
             let item = ClipItem(imageFile: name, imageHash: hash, appBundleID: app?.bundleIdentifier, appName: app?.localizedName)
             insert(item)
             recognizeText(in: item)
@@ -311,6 +376,9 @@ final class ClipStore: ObservableObject {
             pb.writeObjects(item.fileURLs.filter { FileManager.default.fileExists(atPath: $0.path) } as [NSURL])
         } else if let t = item.text {
             pb.setString(t, forType: .string)
+            if item.isSensitive {
+                pb.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
+            }
             if !plain {
                 if let rtf = item.rtf { pb.setData(rtf, forType: .rtf) }
                 if let html = item.html { pb.setData(html, forType: .html) }
@@ -355,9 +423,9 @@ final class ClipStore: ObservableObject {
     }
 
     func image(for item: ClipItem) -> NSImage? {
-        guard let f = item.imageFile, let url = fileURL(f) else { return nil }
+        guard let f = item.imageFile else { return nil }
         if let cached = imageCache.object(forKey: f as NSString) { return cached }
-        guard let img = NSImage(contentsOf: url) else { return nil }
+        guard let data = imageData(f), let img = NSImage(data: data) else { return nil }
         imageCache.setObject(img, forKey: f as NSString)
         return img
     }
@@ -399,17 +467,47 @@ final class ClipStore: ObservableObject {
     }
 
     private func load() {
-        guard let data = try? Data(contentsOf: historyURL),
-              let decoded = try? JSONDecoder().decode([ClipItem].self, from: data) else { return }
-        items = decoded
+        guard let key else { return }
+        if let sealed = try? Data(contentsOf: historyURL), let data = Vault.open(sealed, with: key),
+           let decoded = try? JSONDecoder().decode([ClipItem].self, from: data) {
+            items = decoded
+        } else if let data = try? Data(contentsOf: legacyHistoryURL),
+                  let decoded = try? JSONDecoder().decode([ClipItem].self, from: data) {
+            migrate(decoded)
+        }
     }
 
+    /// One-time upgrade from the plain-text history: drops anything that looks like a secret,
+    /// encrypts the rest and the stored images, then deletes the plain files.
+    private func migrate(_ old: [ClipItem]) {
+        var kept: [ClipItem] = []
+        for var item in old {
+            if let t = item.text, Secrets.looksSecret(t) { continue }
+            if let name = item.imageFile, name.hasSuffix(".png"), let url = fileURL(name) {
+                let encName = String(name.dropLast(4)) + ".enc"
+                guard let png = try? Data(contentsOf: url), let encURL = fileURL(encName),
+                      writeSealed(png, to: encURL) else { continue }
+                item.imageFile = encName
+            }
+            kept.append(item)
+        }
+        items = kept
+        save()
+        guard FileManager.default.fileExists(atPath: historyURL.path) else { return }
+        try? FileManager.default.removeItem(at: legacyHistoryURL)
+        let leftovers = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        for url in leftovers where url.pathExtension == "png" && fileURL(url.lastPathComponent) != nil {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    /// Encrypts and writes the history. Recognized secrets are always left out.
     private func save() {
         #if DEMO
         return
         #endif
-        guard let data = try? JSONEncoder().encode(items) else { return }
-        try? data.write(to: historyURL, options: .atomic)
+        guard let data = try? JSONEncoder().encode(items.filter { !$0.isSensitive }) else { return }
+        writeSealed(data, to: historyURL)
     }
 }
 
@@ -1007,6 +1105,8 @@ struct PreviewPane: View {
                         } else if !FileManager.default.fileExists(atPath: urls[0].path) {
                             meta(L("Status"), L("File no longer exists"))
                         }
+                    } else if item.isSensitive, let until = item.sensitiveUntil {
+                        meta(L("Stored"), L("Not on disk · gone at %@", until.formatted(date: .omitted, time: .shortened)))
                     } else if let t = item.text {
                         if item.hasFormatting { meta(L("Formatting"), L("Kept · ⌥↩ pastes without")) }
                         let lines = t.split(separator: "\n", omittingEmptySubsequences: false).count
@@ -1026,7 +1126,20 @@ struct PreviewPane: View {
     }
 
     @ViewBuilder private var content: some View {
-        if let item, item.isFile {
+        if let item, item.isSensitive {
+            VStack(spacing: 12) {
+                KindIcon(kind: .secret, size: 56)
+                Text(item.oneLine)
+                    .font(.system(size: 22, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                Text("Hidden and never saved to disk. It disappears from the list after 5 minutes.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 260)
+            }
+            .padding(20)
+        } else if let item, item.isFile {
             VStack(spacing: 10) {
                 if let url = item.imageFileURL, let img = NSImage(contentsOf: url) {
                     Image(nsImage: img)

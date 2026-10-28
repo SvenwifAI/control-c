@@ -91,3 +91,10 @@
 "Kept · ⌥↩ pastes without" = "Behouden · ⌥↩ plakt zonder";
 "Paste Without Formatting" = "Plakken zonder opmaak";
 "Show in Finder" = "Toon in Finder";
+"Secrets" = "Geheimen";
+"Possible password" = "Mogelijk wachtwoord";
+"Hidden and never saved to disk. It disappears from the list after 5 minutes." = "Verborgen en nooit op schijf bewaard. Verdwijnt na 5 minuten uit de lijst.";
+"Stored" = "Opslag";
+"Not on disk · gone at %@" = "Niet op schijf · weg om %@";
+"Recognize passwords and codes" = "Wachtwoorden en codes herkennen";
+"2FA codes, API keys, card numbers and password-like text are never saved and disappear after 5 minutes." = "2FA-codes, API-sleutels, kaartnummers en tekst die op een wachtwoord lijkt, worden nooit bewaard en verdwijnen na 5 minuten.";

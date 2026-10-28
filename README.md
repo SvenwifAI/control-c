@@ -79,10 +79,11 @@ You can drag the popup by any empty spot.
 
 - **Everything stays on your Mac.** The app makes no network connections.
 - **Password manager secrets are skipped.** That covers 1Password, iCloud Keychain, Bitwarden and other apps that mark what they copy as concealed.
-- **Your history lives in** `~/Library/Application Support/ControlC/`. Only your user account can read that folder, and it is excluded from Time Machine.
+- **Encrypted on disk.** Your history and images are stored with AES-256-GCM in `~/Library/Application Support/ControlC/`. The key is created on first launch and kept in your macOS Keychain, never in a file. Only your user account can read the folder, and it is excluded from Time Machine.
+- **Passwords and codes are recognized and never saved.** 2FA codes, API keys and tokens (GitHub, AWS, Stripe, Slack and more), private keys, card numbers and password-like text stay in memory only, shown masked as `••••••`, and disappear after 5 minutes. Pasting one back marks it as concealed, so other clipboard tools skip it too. You can turn this off in Settings.
 - **Items expire after 7 days** without use, and at most 60 are kept. Both are adjustable in Settings. Text over 1 MB and images over 20 MB are never stored.
 - **Excluded apps:** nothing you copy in apps you exclude in Settings is ever stored.
-- **Heads-up:** text you copy from somewhere other than a password manager, such as a password in a note or a 2FA code, *is* kept. Delete it with `⌘⌫`.
+- **Heads-up:** recognizing secrets is a best guess. A password made only of letters (no digits) can slip through. It is still encrypted on disk, and you can delete it with `⌘⌫`.
 - Accessibility access is used only to find your text cursor and to send ⌘V.
 - **Only run a build you made yourself** from this source. A prebuilt `.app` from someone else can't be verified, yet it would get access to your clipboard and to Accessibility.
 

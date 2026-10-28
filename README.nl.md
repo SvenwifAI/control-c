@@ -57,10 +57,11 @@ cd control-c
 
 - **Alles blijft op je Mac.** De app maakt geen internetverbinding.
 - **Wachtwoorden uit wachtwoordmanagers** (1Password, iCloud-sleutelhanger, Bitwarden en andere apps die hun kopieën als geheim markeren) worden niet opgeslagen.
-- **Je geschiedenis staat in** `~/Library/Application Support/ControlC/`. Alleen jouw gebruikersaccount kan die map lezen en hij gaat niet mee in Time Machine-backups.
+- **Versleuteld op schijf.** Je geschiedenis en afbeeldingen worden met AES-256-GCM opgeslagen in `~/Library/Application Support/ControlC/`. De sleutel wordt bij de eerste start gemaakt en staat in je macOS-sleutelhanger, nooit in een bestand. Alleen jouw gebruikersaccount kan de map lezen en hij gaat niet mee in Time Machine-backups.
+- **Wachtwoorden en codes worden herkend en nooit bewaard.** 2FA-codes, API-sleutels en tokens (GitHub, AWS, Stripe, Slack en meer), privésleutels, kaartnummers en tekst die op een wachtwoord lijkt, staan alleen in het geheugen, worden gemaskeerd getoond als `••••••` en verdwijnen na 5 minuten. Plak je er een terug, dan wordt hij als geheim gemarkeerd, zodat andere klembordapps hem ook overslaan. Uitzetten kan in Instellingen.
 - **Items verlopen na 7 dagen** zonder gebruik, en er worden hooguit 60 items bewaard. Beide kun je aanpassen in Instellingen (1, 7 of 30 dagen; 20 tot 200 items). Teksten groter dan 1 MB en afbeeldingen groter dan 20 MB worden niet bewaard.
 - **Apps uitsluiten:** wat je kopieert in apps die je in Instellingen uitsluit, wordt nooit bewaard.
-- **Let op:** wat je zonder wachtwoordmanager kopieert, bijvoorbeeld een wachtwoord uit een notitie of een 2FA-code, komt wel in de geschiedenis. Verwijder zo'n item met `⌘⌫`.
+- **Let op:** het herkennen van wachtwoorden blijft een inschatting. Een wachtwoord met alleen letters (zonder cijfers) kan erdoorheen glippen. Dat staat dan nog steeds versleuteld op schijf, en je verwijdert het met `⌘⌫`.
 - De toestemming voor Toegankelijkheid gebruikt de app alleen om je tekstcursor te vinden en om ⌘V te versturen.
 - **Gebruik alleen een versie die je zelf hebt gebouwd.** Neem geen kant-en-klare `.app` van iemand anders over: die kun je niet controleren en hij krijgt wel toegang tot je klembord en tot Toegankelijkheid.
 

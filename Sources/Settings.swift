@@ -73,6 +73,7 @@ final class Settings: ObservableObject {
     @Published var maxItems: Int { didSet { defaults.set(maxItems, forKey: "maxItems"); onLimitsChange() } }
     @Published var retentionDays: Int { didSet { defaults.set(retentionDays, forKey: "retentionDays"); onLimitsChange() } }
     @Published var recognizeText: Bool { didSet { defaults.set(recognizeText, forKey: "recognizeText") } }
+    @Published var detectSecrets: Bool { didSet { defaults.set(detectSecrets, forKey: "detectSecrets") } }
     @Published var excludedApps: [String] { didSet { defaults.set(excludedApps, forKey: "excludedApps") } }
     /// True while the recorder listens, so the current global shortcut can be paused.
     @Published var isRecording = false { didSet { onRecordingChange(isRecording) } }
@@ -89,6 +90,7 @@ final class Settings: ObservableObject {
         maxItems = defaults.object(forKey: "maxItems") as? Int ?? 60
         retentionDays = defaults.object(forKey: "retentionDays") as? Int ?? 7
         recognizeText = defaults.object(forKey: "recognizeText") as? Bool ?? true
+        detectSecrets = defaults.object(forKey: "detectSecrets") as? Bool ?? true
         excludedApps = defaults.stringArray(forKey: "excludedApps") ?? []
     }
 }
@@ -154,6 +156,10 @@ struct SettingsView: View {
                 Toggle(isOn: $settings.recognizeText) {
                     Text("Recognize text in images")
                     Text("Search inside screenshots. Runs on your Mac; nothing goes online.")
+                }
+                Toggle(isOn: $settings.detectSecrets) {
+                    Text("Recognize passwords and codes")
+                    Text("2FA codes, API keys, card numbers and password-like text are never saved and disappear after 5 minutes.")
                 }
                 Button("Clear History…", role: .destructive, action: onClearHistory)
             }
