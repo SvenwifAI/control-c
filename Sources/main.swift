@@ -7,6 +7,10 @@ import ServiceManagement
 import CryptoKit
 import Vision
 
+/// UI text: English in the source, Dutch from nl.lproj when the Mac is set to Dutch.
+func L(_ key: String) -> String { NSLocalizedString(key, comment: "") }
+func L(_ key: String, _ args: CVarArg...) -> String { String(format: L(key), arguments: args) }
+
 // MARK: - Model
 
 struct ClipItem: Identifiable, Codable, Equatable {
@@ -49,11 +53,11 @@ struct ClipItem: Identifiable, Codable, Equatable {
     var oneLine: String {
         guard let text else {
             guard let ocr = ocrText?.split(whereSeparator: \.isWhitespace).joined(separator: " "), !ocr.isEmpty
-            else { return "Afbeelding" }
-            return "Afbeelding · \(ocr.prefix(200))"
+            else { return L("Image") }
+            return L("Image") + " · \(ocr.prefix(200))"
         }
         let collapsed = text.prefix(300).split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        return collapsed.isEmpty ? "(witruimte)" : collapsed
+        return collapsed.isEmpty ? L("(whitespace)") : collapsed
     }
 }
 
@@ -63,23 +67,23 @@ enum ClipKind: CaseIterable {
 
     var label: String {
         switch self {
-        case .text: "Tekst"
-        case .link: "Links"
-        case .image: "Afbeeldingen"
-        case .code: "Code"
-        case .color: "Kleuren"
-        case .email: "E-mail"
+        case .text: L("Text")
+        case .link: L("Links")
+        case .image: L("Images")
+        case .code: L("Code")
+        case .color: L("Colors")
+        case .email: L("Email")
         }
     }
 
     var singular: String {
         switch self {
-        case .text: "Tekst"
-        case .link: "Link"
-        case .image: "Afbeelding"
-        case .code: "Code"
-        case .color: "Kleur"
-        case .email: "E-mailadres"
+        case .text: L("Text")
+        case .link: L("Link")
+        case .image: L("Image")
+        case .code: L("Code")
+        case .color: L("Color")
+        case .email: L("Email address")
         }
     }
 
@@ -376,7 +380,7 @@ final class PickerModel: ObservableObject {
         let items = kindFilter.map { kind in store.items.filter { $0.kind == kind } } ?? store.items
         guard !q.isEmpty else { return items }
         return items.filter {
-            ($0.text ?? "afbeelding image \($0.ocrText ?? "")").localizedCaseInsensitiveContains(q)
+            ($0.text ?? "afbeelding image screenshot \($0.ocrText ?? "")").localizedCaseInsensitiveContains(q)
                 || ($0.appName ?? "").localizedCaseInsensitiveContains(q)
         }
     }
@@ -440,11 +444,11 @@ struct VisualEffect: NSViewRepresentable {
 func relativeTime(_ date: Date) -> String {
     let s = Int(-date.timeIntervalSinceNow)
     switch s {
-    case ..<60: return "zojuist"
-    case ..<3600: return "\(s / 60) min geleden"
-    case ..<86400: return "\(s / 3600) uur geleden"
-    case ..<172_800: return "gisteren"
-    default: return "\(s / 86400) dagen geleden"
+    case ..<60: return L("just now")
+    case ..<3600: return L("%d min ago", s / 60)
+    case ..<86400: return L("%d hr ago", s / 3600)
+    case ..<172_800: return L("yesterday")
+    default: return L("%d days ago", s / 86400)
     }
 }
 
@@ -486,7 +490,7 @@ struct PickerView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(.secondary)
-            TextField("Zoek in klembord", text: $model.query)
+            TextField("Search clipboard", text: $model.query)
                 .textFieldStyle(.plain)
                 .font(.system(size: model.expanded ? 18 : 16))
                 .focused($searchFocused)
@@ -507,7 +511,7 @@ struct PickerView: View {
         }
         .buttonStyle(.plain)
         .glassSurface(Circle(), interactive: true)
-        .help(model.expanded ? "Verkleinen (tab)" : "Vergroten met voorbeeld (tab)")
+        .help(model.expanded ? L("Smaller (Tab)") : L("Larger with preview (Tab)"))
     }
 
     /// Small and quiet, at the far right of the filter row.
@@ -520,7 +524,7 @@ struct PickerView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Instellingen (⌘,)")
+        .help("Settings (⌘,)")
     }
 
     private var card: some View {
@@ -567,7 +571,7 @@ struct PickerView: View {
         return Button { model.kindFilter = kind } label: {
             HStack(spacing: 4) {
                 if let kind { Image(systemName: kind.symbol).font(.system(size: 11, weight: .semibold)) }
-                if kind == nil || model.expanded { Text(kind?.label ?? "Alles") }
+                if kind == nil || model.expanded { Text(kind?.label ?? L("All")) }
             }
             .font(.system(size: 11.5, weight: .medium))
             .foregroundStyle(active ? (kind == nil ? Color.primary : Color.white) : (kind == nil ? Color.secondary : tint))
@@ -579,7 +583,7 @@ struct PickerView: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .help(kind?.label ?? "Alles")
+        .help(kind?.label ?? L("All"))
     }
 
     private func list(_ items: [ClipItem]) -> some View {
@@ -607,17 +611,17 @@ struct PickerView: View {
                                 if inside { hoveredID = item.id } else if hoveredID == item.id { hoveredID = nil }
                             }
                             .contextMenu {
-                                Button("Plakken") { model.onChoose(item, true) }
-                                Button("Kopiëren") { copy(item, at: idx) }
+                                Button("Paste") { model.onChoose(item, true) }
+                                Button("Copy") { copy(item, at: idx) }
                                 if let ocr = item.ocrText, !ocr.isEmpty {
-                                    Button("Kopieer tekst uit afbeelding") {
+                                    Button("Copy Text from Image") {
                                         NSPasteboard.general.clearContents()
                                         NSPasteboard.general.setString(ocr, forType: .string)
                                     }
                                 }
                                 Divider()
-                                Button("Verwijderen") { model.delete(item) }
-                                Button("Alles wissen…") { model.confirmingClear = true }
+                                Button("Delete") { model.delete(item) }
+                                Button("Clear All…") { model.confirmingClear = true }
                             }
                     }
                 }
@@ -669,19 +673,19 @@ struct PickerView: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .help("Verwijderen (⌘⌫)")
+        .help("Delete (⌘⌫)")
         .padding(.trailing, 8)
     }
 
     @ViewBuilder private var banner: some View {
         if model.confirmingClear {
             BannerBar {
-                Text("Alle \(store.items.count) items wissen?")
+                Text(L("Clear all %d items?", store.items.count))
                 Spacer(minLength: 8)
-                Button("Annuleer") { model.confirmingClear = false }
+                Button("Cancel") { model.confirmingClear = false }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
-                Button("Wis alles") { model.clearAll() }
+                Button("Clear All") { model.clearAll() }
                     .buttonStyle(.plain)
                     .foregroundStyle(.red)
                     .fontWeight(.semibold)
@@ -689,11 +693,11 @@ struct PickerView: View {
         } else if store.lastDeleted != nil {
             BannerBar {
                 Image(systemName: "trash").foregroundStyle(.secondary)
-                Text("Verwijderd")
+                Text("Deleted")
                 Spacer(minLength: 8)
                 Button { model.undoDelete() } label: {
                     HStack(spacing: 4) {
-                        Text("Ongedaan maken")
+                        Text("Undo")
                         Text("⌘Z").foregroundStyle(.secondary)
                     }
                 }
@@ -709,7 +713,7 @@ struct PickerView: View {
             Image(systemName: model.query.isEmpty ? "clipboard" : "magnifyingglass")
                 .font(.system(size: 22, weight: .light))
                 .foregroundStyle(.tertiary)
-            Text(model.query.isEmpty ? "Nog niks gekopieerd" : "Geen resultaten")
+            Text(model.query.isEmpty ? L("Nothing copied yet") : L("No results"))
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
         }
@@ -718,13 +722,13 @@ struct PickerView: View {
 
     private var footer: some View {
         HStack(spacing: 14) {
-            Text("\(store.items.count) items")
+            Text(L("%d items", store.items.count))
                 .foregroundStyle(.tertiary)
             Spacer()
-            KeyHint(keys: "↩", label: "Plakken")
-            KeyHint(keys: "⇧↩", label: "Alleen kopiëren")
-            KeyHint(keys: "⌘⌫", label: "Verwijder")
-            KeyHint(keys: "esc", label: "Sluit")
+            KeyHint(keys: "↩", label: L("Paste"))
+            KeyHint(keys: "⇧↩", label: L("Copy only"))
+            KeyHint(keys: "⌘⌫", label: L("Delete"))
+            KeyHint(keys: "esc", label: L("Close"))
         }
         .font(.system(size: 11))
         .padding(.horizontal, 14)
@@ -803,7 +807,7 @@ struct ClipRow: View {
             }
             Spacer(minLength: 4)
             if copied {
-                Label("Gekopieerd", systemImage: "checkmark")
+                Label("Copied", systemImage: "checkmark")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(selected ? Color.white : Color.secondary)
             } else if hovered {
@@ -887,16 +891,16 @@ struct PreviewPane: View {
                             .foregroundStyle(item.kind.tint)
                     }
                     .padding(.bottom, 3)
-                    meta("Bron", item.appName ?? "Onbekend")
-                    meta("Gekopieerd", item.date.formatted(date: .abbreviated, time: .shortened))
+                    meta(L("Source"), item.appName ?? L("Unknown"))
+                    meta(L("Copied"), item.date.formatted(date: .abbreviated, time: .shortened))
                     if let t = item.text {
                         let lines = t.split(separator: "\n", omittingEmptySubsequences: false).count
-                        meta("Inhoud", "\(t.count) tekens · \(lines) \(lines == 1 ? "regel" : "regels")")
+                        meta(L("Content"), lines == 1 ? L("%d characters · 1 line", t.count) : L("%d characters · %d lines", t.count, lines))
                     } else if let img = store.image(for: item) {
-                        meta("Afmetingen", "\(Int(img.size.width)) × \(Int(img.size.height))")
+                        meta(L("Size"), "\(Int(img.size.width)) × \(Int(img.size.height))")
                         if let ocr = item.ocrText, !ocr.isEmpty {
                             let words = ocr.split(whereSeparator: \.isWhitespace).count
-                            meta("Tekst", "\(words) woorden herkend · rechtsklik om te kopiëren")
+                            meta(L("Text"), L("%d words recognized · right-click to copy", words))
                         }
                     }
                 }
@@ -1012,12 +1016,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     lazy var model = PickerModel(store: store)
     let settings = Settings.shared
     lazy var settingsWindow = SettingsWindowController { [weak self] in self?.clearHistory() }
-    let openItem = NSMenuItem(title: "Open klembord", action: #selector(openFromMenu), keyEquivalent: "")
+    let openItem = NSMenuItem(title: L("Open Clipboard"), action: #selector(openFromMenu), keyEquivalent: "")
     var panel: ClipPanel!
     var hotKey: HotKey?
     var statusItem: NSStatusItem!
-    let loginItem = NSMenuItem(title: "Start bij inloggen", action: #selector(toggleLogin), keyEquivalent: "")
-    let pasteItem = NSMenuItem(title: "Automatisch plakken inschakelen…", action: #selector(requestAccessibility), keyEquivalent: "")
+    let loginItem = NSMenuItem(title: L("Start at Login"), action: #selector(toggleLogin), keyEquivalent: "")
+    let pasteItem = NSMenuItem(title: L("Enable Automatic Pasting…"), action: #selector(requestAccessibility), keyEquivalent: "")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         store.start()
@@ -1204,19 +1208,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let menu = NSMenu()
         menu.delegate = self
         menu.addItem(openItem)
-        menu.addItem(withTitle: "Instellingen…", action: #selector(openSettings), keyEquivalent: ",")
+        menu.addItem(withTitle: L("Settings…"), action: #selector(openSettings), keyEquivalent: ",")
         menu.addItem(.separator())
         menu.addItem(loginItem)
         menu.addItem(pasteItem)
-        menu.addItem(withTitle: "Geschiedenis wissen", action: #selector(clearHistory), keyEquivalent: "")
+        menu.addItem(withTitle: L("Clear History…"), action: #selector(clearHistory), keyEquivalent: "")
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Stop Control+C", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(withTitle: L("Quit Control+C"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.items.forEach { if $0.action != #selector(NSApplication.terminate(_:)) { $0.target = self } }
         statusItem.menu = menu
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        openItem.title = "Open klembord   \(settings.shortcut.display)"
+        openItem.title = L("Open Clipboard") + "   \(settings.shortcut.display)"
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         pasteItem.isHidden = AXIsProcessTrusted()
     }
@@ -1225,10 +1229,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     @objc func clearHistory() {
         let alert = NSAlert()
-        alert.messageText = "Hele klembordgeschiedenis wissen?"
-        alert.informativeText = "Alle \(store.items.count) items worden verwijderd. Dit kan niet ongedaan worden gemaakt."
-        alert.addButton(withTitle: "Wis alles").hasDestructiveAction = true
-        alert.addButton(withTitle: "Annuleer")
+        alert.messageText = L("Clear your entire clipboard history?")
+        alert.informativeText = L("All %d items will be deleted. This can’t be undone.", store.items.count)
+        alert.addButton(withTitle: L("Clear All")).hasDestructiveAction = true
+        alert.addButton(withTitle: L("Cancel"))
         NSApp.activate()
         if alert.runModal() == .alertFirstButtonReturn { model.clearAll() }
     }

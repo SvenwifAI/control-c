@@ -25,6 +25,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key><string>Control+C</string>
   <key>CFBundleExecutable</key><string>ControlC</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
+  <key>CFBundleLocalizations</key><array><string>en</string><string>nl</string></array>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
   <key>CFBundleVersion</key><string>1</string>
@@ -36,7 +38,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 
 mkdir -p "$APP/Contents/Resources"
-cp Resources/AppIcon.icns "$APP/Contents/Resources/"
+cp -R Resources/AppIcon.icns Resources/*.lproj "$APP/Contents/Resources/"
 
 # A fixed self-signed identity keeps the Accessibility permission valid across rebuilds;
 # ad-hoc signing (-) would make macOS forget it every time.

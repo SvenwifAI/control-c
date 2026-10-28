@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/screenshot-compact.png" width="420" alt="Control+C"></p>
+<p align="center"><img src="docs/screenshot-compact.nl.png" width="420" alt="Control+C"></p>
 
 # Control+C
 
@@ -45,6 +45,8 @@ cd control-c
 | `⇧⌘⌫` | Alles wissen (vraagt eerst om bevestiging) |
 | `⌘,` | Instellingen |
 | `esc` | Sluiten |
+
+**Taal:** de app volgt de taal van je Mac: Nederlands als je Mac in het Nederlands staat, anders Engels.
 
 **Zoeken in screenshots:** in gekopieerde afbeeldingen wordt de tekst herkend, zodat je daar ook in kunt zoeken. Met een rechtermuisklik op een afbeelding kopieer je die tekst. Dit gebeurt met Apple Vision op je eigen Mac. Uitzetten kan in Instellingen.
 

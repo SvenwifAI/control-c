@@ -31,7 +31,7 @@ struct Shortcut: Codable, Equatable {
         if flags.contains(.option) { s += "⌥" }
         if flags.contains(.shift) { s += "⇧" }
         if flags.contains(.command) { s += "⌘" }
-        return s + keyLabel
+        return s + (keyLabel == "Space" ? L("Space") : keyLabel)
     }
 
     init(keyCode: Int, modifiers: UInt, keyLabel: String) {
@@ -46,7 +46,7 @@ struct Shortcut: Codable, Equatable {
         guard !mods.intersection([.command, .option, .control]).isEmpty else { return nil }
         let code = Int(event.keyCode)
         let named: [Int: String] = [
-            kVK_Return: "↩", kVK_ANSI_KeypadEnter: "⌤", kVK_Space: "Spatie", kVK_Tab: "⇥",
+            kVK_Return: "↩", kVK_ANSI_KeypadEnter: "⌤", kVK_Space: "Space", kVK_Tab: "⇥",
             kVK_Delete: "⌫", kVK_ForwardDelete: "⌦", kVK_UpArrow: "↑", kVK_DownArrow: "↓",
             kVK_LeftArrow: "←", kVK_RightArrow: "→", kVK_Home: "↖", kVK_End: "↘",
             kVK_PageUp: "⇞", kVK_PageDown: "⇟", kVK_F1: "F1", kVK_F2: "F2", kVK_F3: "F3", kVK_F4: "F4",
@@ -105,7 +105,7 @@ final class SettingsWindowController {
         if window == nil {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 600),
                              styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
-            w.title = "Instellingen"
+            w.title = L("Settings")
             w.titlebarAppearsTransparent = true
             w.isReleasedWhenClosed = false
             w.contentView = NSHostingView(rootView: SettingsView(settings: .shared, onClearHistory: onClearHistory))
@@ -129,58 +129,58 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section {
-                LabeledContent("Klembord openen") { ShortcutRecorder(settings: settings) }
+                LabeledContent("Open clipboard") { ShortcutRecorder(settings: settings) }
                 if settings.shortcutTaken {
-                    Label("Deze sneltoets wordt al door een andere app gebruikt.", systemImage: "exclamationmark.triangle.fill")
+                    Label("Another app already uses this shortcut.", systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
                         .font(.callout)
                 }
             } header: {
-                Text("Sneltoets")
+                Text("Shortcut")
             } footer: {
-                Text("⌘↩ verstuurt ook berichten in apps als Slack, Teams en Claude. Kies bijvoorbeeld ⌥V of ⌘⇧V als dat botst.")
+                Text("⌘↩ also sends messages in apps like Slack, Teams and Claude. If that clashes, try ⌥V or ⌘⇧V.")
                     .foregroundStyle(.secondary)
             }
 
-            Section("Geschiedenis") {
-                Picker("Aantal items", selection: $settings.maxItems) {
+            Section("History") {
+                Picker("Number of items", selection: $settings.maxItems) {
                     ForEach([20, 60, 100, 200], id: \.self) { Text("\($0)").tag($0) }
                 }
-                Picker("Bewaren", selection: $settings.retentionDays) {
-                    Text("1 dag").tag(1)
-                    Text("7 dagen").tag(7)
-                    Text("30 dagen").tag(30)
+                Picker("Keep for", selection: $settings.retentionDays) {
+                    Text("1 day").tag(1)
+                    Text("7 days").tag(7)
+                    Text("30 days").tag(30)
                 }
                 Toggle(isOn: $settings.recognizeText) {
-                    Text("Tekst in afbeeldingen herkennen")
-                    Text("Zoeken in screenshots. Gebeurt op je Mac, er gaat niets het internet op.")
+                    Text("Recognize text in images")
+                    Text("Search inside screenshots. Runs on your Mac; nothing goes online.")
                 }
-                Button("Geschiedenis wissen…", role: .destructive, action: onClearHistory)
+                Button("Clear History…", role: .destructive, action: onClearHistory)
             }
 
             Section {
                 if settings.excludedApps.isEmpty {
-                    Text("Geen apps uitgesloten").foregroundStyle(.secondary)
+                    Text("No apps excluded").foregroundStyle(.secondary)
                 }
                 ForEach(settings.excludedApps, id: \.self) { id in
                     ExcludedAppRow(bundleID: id) { settings.excludedApps.removeAll { $0 == id } }
                 }
-                Button("App toevoegen…", action: addExcludedApp)
+                Button("Add App…", action: addExcludedApp)
             } header: {
-                Text("Uitgesloten apps")
+                Text("Excluded Apps")
             } footer: {
-                Text("Wat je in deze apps kopieert, wordt nooit bewaard. Handig voor bankieren of een wachtwoordbestand.")
+                Text("Nothing you copy in these apps is ever stored. Useful for banking or a password file.")
                     .foregroundStyle(.secondary)
             }
 
-            Section("Algemeen") {
-                Toggle("Start bij inloggen", isOn: $loginEnabled)
+            Section("General") {
+                Toggle("Start at login", isOn: $loginEnabled)
                     .onChange(of: loginEnabled) { setLogin(loginEnabled) }
-                LabeledContent("Automatisch plakken") {
+                LabeledContent("Automatic pasting") {
                     if accessibilityGranted {
-                        Label("Aan", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                        Label("On", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
                     } else {
-                        Button("Toestaan…") {
+                        Button("Allow…") {
                             NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
                         }
                     }
@@ -200,7 +200,7 @@ struct SettingsView: View {
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
         panel.allowedContentTypes = [.application]
         panel.allowsMultipleSelection = true
-        panel.prompt = "Uitsluiten"
+        panel.prompt = L("Exclude")
         guard panel.runModal() == .OK else { return }
         for url in panel.urls {
             if let id = Bundle(url: url)?.bundleIdentifier, !settings.excludedApps.contains(id) {
@@ -233,7 +233,7 @@ struct ExcludedAppRow: View {
             Spacer()
             Button(action: onRemove) { Image(systemName: "minus.circle.fill").foregroundStyle(.secondary) }
                 .buttonStyle(.plain)
-                .help("Niet meer uitsluiten")
+                .help("Stop excluding")
         }
     }
 }
@@ -246,7 +246,7 @@ struct ShortcutRecorder: View {
     var body: some View {
         HStack(spacing: 6) {
             Button(action: toggleRecording) {
-                Text(settings.isRecording ? "Druk op toetsen…" : settings.shortcut.display)
+                Text(settings.isRecording ? L("Press keys…") : settings.shortcut.display)
                     .font(.system(size: 13, weight: .medium, design: settings.isRecording ? .default : .rounded))
                     .foregroundStyle(settings.isRecording ? Color.accentColor : Color.primary)
                     .frame(minWidth: 110)
@@ -256,7 +256,7 @@ struct ShortcutRecorder: View {
             if settings.shortcut != .standard && !settings.isRecording {
                 Button { settings.shortcut = .standard } label: { Image(systemName: "arrow.counterclockwise") }
                     .buttonStyle(.borderless)
-                    .help("Terug naar ⌘↩")
+                    .help("Back to ⌘↩")
             }
         }
         .onDisappear(perform: stop)

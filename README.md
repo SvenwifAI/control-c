@@ -25,6 +25,7 @@ Press **⌘↩** anywhere and a compact popup appears right under your text curs
 - **Preview:** press Tab for a larger view with a full preview, source app and details.
 - **Your shortcut:** pick any key combination in Settings.
 - **Private:** nothing ever leaves your Mac, and secrets from password managers are never stored.
+- **English and Dutch:** the app follows your Mac's language.
 
 <p align="center">
   <img src="docs/screenshot-expanded.png" width="720" alt="Expanded view with preview pane">
@@ -51,8 +52,6 @@ cd control-c
 **Pasting for you:** the first time, macOS asks for access under System Settings → Privacy & Security → **Accessibility**. Turn Control+C on there. Without it, choosing an item only copies it, so you paste it yourself with ⌘V. The popup then also opens at your mouse instead of your text cursor.
 
 **Settings:** choose *Settings…* from the clipboard icon in the menu bar, or press `⌘,` or the gear in the popup. You can set your shortcut, how many items to keep and for how long, apps to ignore, and whether Control+C starts at login.
-
-> The interface is in Dutch for now.
 
 ## Keyboard
 
@@ -105,6 +104,7 @@ Then remove Control+C from Accessibility and from your Login Items.
 | `Sources/Settings.swift` | Preferences and the Settings window |
 | `Sources/Demo.swift` | Sample data for screenshots (built only with `-D DEMO`) |
 | `Scripts/make-icon.swift` | Renders `Resources/AppIcon.icns` |
+| `Resources/*.lproj` | Translations (English is the source language) |
 | `Scripts/screenshot.sh` | Regenerates the images in `docs/` from sample data |
 | `build.sh` | Builds, signs, installs and launches the app |
 
