@@ -815,7 +815,9 @@ final class PickerModel: ObservableObject {
     @Published var copiedID: UUID?
     @Published var expanded = UserDefaults.standard.bool(forKey: "expanded") {
         didSet {
+            #if !DEMO // the demo shares the real app's settings
             UserDefaults.standard.set(expanded, forKey: "expanded")
+            #endif
             onResize()
         }
     }

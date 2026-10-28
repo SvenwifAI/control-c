@@ -28,11 +28,9 @@ shoot() {
   DEMO_EXPANDED=$1 DEMO_CROP_FILE="$TMP/crop" "$BIN" -AppleLanguages "($3)" & pid=$!
   for _ in {1..50}; do [ -s "$TMP/crop" ] && break; sleep 0.2; done
   sleep 0.8
-  screencapture -x "$TMP/full.png"
+  # Only the popup's own rectangle is captured, never the rest of the screen.
+  screencapture -x -R "$(cat "$TMP/crop")" "docs/$2"
   kill $pid
-  read -r h w y x < "$TMP/crop" || true  # the file has no trailing newline
-  sips -c "$h" "$w" --cropOffset "$y" "$x" "$TMP/full.png" --out "docs/$2" >/dev/null
-  rm -f "$TMP/full.png"
   echo "docs/$2"
 }
 

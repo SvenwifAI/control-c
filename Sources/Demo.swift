@@ -80,7 +80,10 @@ extension AppDelegate {
         let p = panel.frame
         let scale = screen.backingScaleFactor
         // Pixel crop rect (top-left origin) for sips: height width y x
-        let crop = "\(Int(p.height * scale)) \(Int(p.width * scale)) \(Int((screen.frame.maxY - p.maxY) * scale)) \(Int(p.minX * scale))"
+        _ = scale
+        // Region in global points with a top-left origin, for `screencapture -R`: only the popup is captured.
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
+        let crop = "\(Int(p.minX)),\(Int(primaryHeight - p.maxY)),\(Int(p.width)),\(Int(p.height))"
         try? crop.write(toFile: ProcessInfo.processInfo.environment["DEMO_CROP_FILE"] ?? "/dev/null",
                         atomically: true, encoding: .utf8)
     }

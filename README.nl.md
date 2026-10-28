@@ -61,15 +61,15 @@ cd control-c
   - 2FA-codes, kaartnummers en tekst die op een wachtwoord lijkt, zoals `Zomer2026!` of Apples `xupjo4-gyzZyc-bavkif`
   - API-sleutels en tokens (GitHub, GitLab, Anthropic, OpenAI, Stripe, Slack, AWS, Google en meer), JWT's en privésleutels, ook midden in een langere tekst
   - configuratieregels zoals `export API_KEY=…` of `Wachtwoord: …`, en links met een wachtwoord erin (`postgres://gebruiker:wachtwoord@host`)
-  - screenshots waarvan de tekst een van bovenstaande bevat
+  - screenshots waarop een sleutel, token, gelabeld wachtwoord of kaartnummer te lezen is
 
   Plak je een geheim terug, dan wordt het als geheim gemarkeerd en blijft het van het Universele klembord af, zodat andere klembordapps en apparaten het overslaan. Herkenning uitzetten kan in Instellingen.
-- **Geheimen uit wachtwoordmanagers worden helemaal overgeslagen:** 1Password, iCloud-sleutelhanger en andere apps die hun kopieën als geheim markeren.
+- **Gemarkeerde kopieën worden helemaal overgeslagen:** wachtwoordmanagers zoals 1Password markeren wat ze kopiëren als geheim of tijdelijk, en Control+C bewaart daar dan niets van.
 - **Uitgesloten apps:** wat je kopieert in apps die je in Instellingen uitsluit, wordt niet bewaard, ook niet als je vlak na het kopiëren van app wisselt. Een app uitsluiten haalt ook weg wat die app al had toegevoegd.
 - **Items verlopen na 7 dagen** zonder gebruik, en er worden hooguit 60 bewaard (geheimen tellen niet mee). Beide pas je aan in Instellingen. Tekst groter dan 1 MB en afbeeldingen groter dan 20 MB of 50 megapixel worden niet bewaard. *Geschiedenis wissen* verwijdert alle bestanden en vervangt de sleutel, zodat oude kopieën elders ook onleesbaar worden.
-- **Verborgen bij scherm delen** (standaard): de popup is niet te zien in gesprekken, opnames en screenshots.
+- **Verborgen bij scherm delen** (standaard): de popup vraagt macOS om buiten scherm delen, opnames en screenshots te blijven. De meeste apps houden zich daaraan; controleer het in jouw app voordat je erop vertrouwt.
 - **Geen speciale toestemmingen.** De app gebruikt geen Toegankelijkheid, en kan dus niet in andere apps typen of hun vensters uitlezen. Hij is gebouwd met de hardened runtime, zodat geen ander programma code in de app kan laden om de sleutel van je geschiedenis te lenen.
-- **Let op:** het herkennen van geheimen blijft een inschatting. Een wachtwoord van alleen letters, of een wachtzin met spaties, kan erdoorheen glippen. Dat staat dan nog steeds versleuteld op schijf, en je verwijdert het met `⌘⌫`.
+- **Let op:** het herkennen van geheimen blijft een inschatting. Een woord met een getal erachter (`Zomer2026`), een wachtwoord van alleen letters, een wachtzin met spaties of streepjes, en alles na de eerste 64 KB van een kopie kunnen erdoorheen glippen. Zo'n item staat dan nog steeds versleuteld op schijf, en je verwijdert het met `⌘⌫`.
 - **Gebruik alleen een versie die je zelf hebt gebouwd.** Neem geen kant-en-klare `.app` van iemand anders over: die kun je niet controleren en hij ziet wel alles wat je kopieert.
 
 ## Sneltoets aanpassen
@@ -83,7 +83,7 @@ De sleutelhanger geeft de sleutel van je geschiedenis alleen aan de app die hem 
 ## Verwijderen
 
 ```bash
-pkill -x ControlC; rm -rf /Applications/ControlC.app ~/Library/Application\ Support/ControlC; security delete-generic-password -s com.svenvanrooijen.controlc -a history-key
+pkill -x ControlC; rm -rf /Applications/ControlC.app ~/Library/Application\ Support/ControlC; security delete-generic-password -s com.svenvanrooijen.controlc -a history-key; defaults delete com.svenvanrooijen.controlc
 ```
 
 Haal Control+C daarna ook weg uit je inlogonderdelen.

@@ -40,12 +40,14 @@ PLIST
 mkdir -p "$APP/Contents/Resources"
 cp -R Resources/AppIcon.icns Resources/*.lproj "$APP/Contents/Resources/"
 
-# A fixed self-signed identity keeps the Accessibility permission valid across rebuilds;
-# ad-hoc signing (-) would make macOS forget it every time.
+# A fixed self-signed identity keeps the Keychain's trust in the app across rebuilds;
+# with ad-hoc signing (-) macOS asks again after every build whether it may use its key.
 IDENTITY="Control+C Signing"
-security find-certificate -c "$IDENTITY" >/dev/null 2>&1 || IDENTITY="-"
+# Read the list first: `grep -q` stops early, and with pipefail that would fail this check.
+IDENTITIES=$(security find-identity -p codesigning 2>/dev/null || true)
+[[ "$IDENTITIES" == *"\"$IDENTITY\""* ]] || IDENTITY="-"
 # Hardened runtime: blocks DYLD_INSERT_LIBRARIES and similar injection, so no other process can
-# borrow this app's Accessibility permission or its Keychain key. No exception entitlements.
+# borrow its Keychain key. No exception entitlements.
 codesign --force --options runtime --sign "$IDENTITY" --identifier com.svenvanrooijen.controlc "$APP"
 
 pkill -x ControlC 2>/dev/null || true

@@ -83,15 +83,15 @@ You can drag the popup by any empty spot.
   - 2FA codes, card numbers, and password-like text such as `Zomer2026!` or Apple's `xupjo4-gyzZyc-bavkif`
   - API keys and tokens (GitHub, GitLab, Anthropic, OpenAI, Stripe, Slack, AWS, Google and more), JWTs and private keys, also inside a longer text
   - config lines like `export API_KEY=…` or `Password: …`, and links with a password in them (`postgres://user:pass@host`)
-  - screenshots whose text contains one of the above
+  - screenshots whose text shows a key, token, labelled password or card number
 
   Pasting a secret back marks it as concealed and keeps it off Universal Clipboard, so other clipboard tools and devices skip it. You can turn recognition off in Settings.
-- **Password manager secrets are skipped** entirely: 1Password, iCloud Keychain and other apps that mark what they copy as concealed.
+- **Concealed copies are skipped** entirely: password managers such as 1Password mark what they copy as concealed or transient, and Control+C then keeps nothing of it.
 - **Excluded apps:** nothing you copy in apps you exclude in Settings is stored, including a copy made right before switching apps. Excluding an app also removes what it already added.
 - **Items expire after 7 days** without use, and at most 60 are kept (secrets don't count). Both are adjustable in Settings. Text over 1 MB and images over 20 MB or 50 megapixels are never stored. *Clear History* deletes every file and replaces the key, so old copies elsewhere can't be read either.
-- **Hidden from screen sharing** by default: the popup doesn't show up in calls, recordings or screenshots.
+- **Hidden from screen sharing** by default: the popup asks macOS to be left out of screen sharing, recordings and screenshots. Most apps respect that; check yours before relying on it.
 - **No special permissions.** The app doesn't use Accessibility, so it can't type into other apps or read their windows. It is built with the hardened runtime, so no other program can load code into it to borrow its Keychain key.
-- **Heads-up:** recognizing secrets is a best guess. A password of only letters, or a passphrase with spaces, can slip through. It is then still encrypted on disk, and you can delete it with `⌘⌫`.
+- **Heads-up:** recognizing secrets is a best guess. A word followed by a number (`Summer2026`), a password of only letters, a passphrase with spaces or dashes, and anything past the first 64 KB of a copy can slip through. Such an item is still encrypted on disk, and you can delete it with `⌘⌫`.
 - **Only run a build you made yourself** from this source. A prebuilt `.app` from someone else can't be verified, yet it would see everything you copy.
 
 ## Fewer Keychain prompts after rebuilding (optional)
@@ -101,7 +101,7 @@ The Keychain gives the history key only to the app that created it, recognized b
 ## Uninstall
 
 ```bash
-pkill -x ControlC; rm -rf /Applications/ControlC.app ~/Library/Application\ Support/ControlC; security delete-generic-password -s com.svenvanrooijen.controlc -a history-key
+pkill -x ControlC; rm -rf /Applications/ControlC.app ~/Library/Application\ Support/ControlC; security delete-generic-password -s com.svenvanrooijen.controlc -a history-key; defaults delete com.svenvanrooijen.controlc
 ```
 
 Then remove Control+C from your Login Items.
