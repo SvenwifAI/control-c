@@ -80,3 +80,14 @@
 "Press keys…" = "Druk op toetsen…";
 "Back to ⌘↩" = "Terug naar ⌘↩";
 "Space" = "Spatie";
+"Files" = "Bestanden";
+"File" = "Bestand";
+"+ %d more" = "+ %d meer";
+"%d files" = "%d bestanden";
+"Location" = "Locatie";
+"Status" = "Status";
+"File no longer exists" = "Bestand bestaat niet meer";
+"Formatting" = "Opmaak";
+"Kept · ⌥↩ pastes without" = "Behouden · ⌥↩ plakt zonder";
+"Paste Without Formatting" = "Plakken zonder opmaak";
+"Show in Finder" = "Toon in Finder";

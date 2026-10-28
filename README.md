@@ -21,7 +21,8 @@ Press **⌘↩** anywhere and a compact popup appears right under your text curs
 
 - **Instant:** opens at your text cursor with no animation and no delay.
 - **Search everything,** including the text inside screenshots. Copied images are read on your Mac with Apple Vision.
-- **Sorted by kind:** text, links, images, code, colors and email addresses each get their own color, and you can filter on them.
+- **Sorted by kind:** text, links, images, files, code, colors and email addresses each get their own color, and you can filter on them. A small app icon shows where each item came from.
+- **Keeps formatting and files:** bold text and links paste as they were copied (`⌥↩` pastes plain text), and files copied in Finder paste back as real files.
 - **Preview:** press Tab for a larger view with a full preview, source app and details.
 - **Your shortcut:** pick any key combination in Settings.
 - **Private:** nothing ever leaves your Mac, and secrets from password managers are never stored.
@@ -62,6 +63,7 @@ cd control-c
 | `↑` `↓` | Move the selection |
 | `↩` or double-click | Paste into the app you were in |
 | `⇧↩` or single click | Copy only |
+| `⌥↩` | Paste without formatting |
 | `⌘1` … `⌘9` | Paste item 1 to 9 directly |
 | `⌘←` `⌘→` | Filter by kind |
 | `Tab` | Larger view with preview |

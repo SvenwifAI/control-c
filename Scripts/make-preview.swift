@@ -78,7 +78,7 @@ text("Uitgeklapt  ·  Tab", size: 34, weight: .semibold, color: labelColor,
 let features: [(String, NSColor, String, String)] = [
     ("bolt.fill", .systemBlue, "Direct bij je cursor", "Druk ⌘↩ en de popup staat meteen onder je tekstcursor."),
     ("text.viewfinder", .systemPurple, "Zoeken in screenshots", "Tekst in afbeeldingen wordt herkend, op je eigen Mac."),
-    ("square.grid.2x2.fill", .systemOrange, "Kleur per type", "Tekst, links, code, kleuren en e-mail, met filters."),
+    ("square.grid.2x2.fill", .systemOrange, "Kleur per type", "Tekst, links, bestanden, code en kleuren, met filters."),
     ("lock.fill", .systemGreen, "Privé", "Niets verlaat je Mac. Wachtwoorden worden overgeslagen."),
     ("keyboard.fill", .systemPink, "Alles met het toetsenbord", "↩ plakt, ⌘1–9 kiest direct, ⌘⌫ verwijdert, ⌘Z herstelt."),
     ("gearshape.fill", .systemGray, "Zoals jij het wilt", "Eigen sneltoets, bewaartermijn en uitgesloten apps."),

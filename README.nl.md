@@ -37,6 +37,7 @@ cd control-c
 | `↑` `↓` | Item kiezen |
 | `↩` of dubbelklik | Plakken in de app waar je was |
 | `⇧↩` of één klik | Alleen kopiëren |
+| `⌥↩` | Plakken zonder opmaak |
 | `⌘1` … `⌘9` | Item 1 t/m 9 meteen plakken |
 | `⌘←` `⌘→` of de filterknoppen | Alleen tekst, links, afbeeldingen, code, kleuren of e-mailadressen |
 | `tab` of het pijltjesknopje | Grote weergave met voorbeeld |
@@ -47,6 +48,8 @@ cd control-c
 | `esc` | Sluiten |
 
 **Taal:** de app volgt de taal van je Mac: Nederlands als je Mac in het Nederlands staat, anders Engels.
+
+**Opmaak en bestanden:** vetgedrukte tekst en links plak je terug zoals je ze kopieerde, en bestanden die je in Finder kopieert plak je terug als echt bestand. Bij elk item zie je met een klein app-icoon waar het vandaan komt.
 
 **Zoeken in screenshots:** in gekopieerde afbeeldingen wordt de tekst herkend, zodat je daar ook in kunt zoeken. Met een rechtermuisklik op een afbeelding kopieer je die tekst. Dit gebeurt met Apple Vision op je eigen Mac. Uitzetten kan in Instellingen.
 

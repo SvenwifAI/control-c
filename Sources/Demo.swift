@@ -13,10 +13,15 @@ extension ClipStore {
         func item(_ text: String, _ minutes: Double, _ bundleID: String, _ app: String) -> ClipItem {
             ClipItem(text: text, date: ago(minutes), appBundleID: bundleID, appName: app)
         }
+        func file(_ name: String, _ minutes: Double) -> ClipItem {
+            ClipItem(date: ago(minutes), appBundleID: "com.apple.finder", appName: "Finder",
+                     filePaths: [NSHomeDirectory() + "/Documents/" + name])
+        }
         if dutch {
             return [
                 item("https://www.rijksmuseum.nl/nl/bezoeken", 0.2, "com.apple.Safari", "Safari"),
                 item("Zullen we donderdag om 10:00 afspreken? Ik neem het prototype mee.", 3, "com.apple.MobileSMS", messages),
+                file("Offerte Q4.pdf", 5),
                 item("#FF6A00", 8, "com.apple.Notes", notes),
                 item("const totaal = items.reduce((som, i) => som + i.prijs, 0);", 15, "com.apple.Terminal", "Terminal"),
                 item("hallo@voorbeeld.nl", 26, "com.apple.mail", "Mail"),
@@ -30,6 +35,7 @@ extension ClipStore {
         return [
             item("https://developer.apple.com/design/human-interface-guidelines/", 0.2, "com.apple.Safari", "Safari"),
             item("Let's meet Thursday at 10:00. I'll bring the prototype.", 3, "com.apple.MobileSMS", messages),
+            file("Proposal Q4.pdf", 5),
             item("#5E5CE6", 8, "com.apple.Notes", notes),
             item("let total = items.reduce(0) { $0 + $1.price }", 15, "com.apple.Terminal", "Terminal"),
             item("hello@example.com", 26, "com.apple.mail", "Mail"),

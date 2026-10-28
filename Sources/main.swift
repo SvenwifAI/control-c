@@ -6,6 +6,8 @@ import Carbon.HIToolbox
 import ServiceManagement
 import CryptoKit
 import Vision
+import UniformTypeIdentifiers
+import ImageIO
 
 /// UI text: English in the source, Dutch from nl.lproj when the Mac is set to Dutch.
 func L(_ key: String) -> String { NSLocalizedString(key, comment: "") }
@@ -23,10 +25,32 @@ struct ClipItem: Identifiable, Codable, Equatable {
     var appName: String?
     /// Text recognized in an image; "" once recognition ran and found nothing.
     var ocrText: String?
+    /// Files copied in Finder (or elsewhere), kept as paths: the files themselves stay where they are.
+    var filePaths: [String]?
+    /// The formatted versions of copied text, so pasting keeps bold, links and colors.
+    var rtf: Data?
+    var html: Data?
 
     var isImage: Bool { imageFile != nil }
+    var isFile: Bool { filePaths?.isEmpty == false }
+    var hasFormatting: Bool { rtf != nil || html != nil }
+    var fileURLs: [URL] { (filePaths ?? []).map { URL(fileURLWithPath: $0) } }
+
+    /// The first file when it is an image, for thumbnails and text recognition.
+    var imageFileURL: URL? {
+        guard let url = fileURLs.first, UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true
+        else { return nil }
+        return url
+    }
+
+    /// Everything search looks at besides the app name.
+    var searchText: String {
+        if isFile { return fileURLs.map(\.lastPathComponent).joined(separator: " ") + " " + (ocrText ?? "") }
+        return text ?? "afbeelding image screenshot \(ocrText ?? "")"
+    }
 
     var kind: ClipKind {
+        if isFile { return .file }
         guard let text else { return .image }
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if swatch != nil { return .color }
@@ -51,6 +75,10 @@ struct ClipItem: Identifiable, Codable, Equatable {
     }
 
     var oneLine: String {
+        if isFile {
+            let names = fileURLs.map(\.lastPathComponent)
+            return names.count == 1 ? names[0] : names[0] + " " + L("+ %d more", names.count - 1)
+        }
         guard let text else {
             guard let ocr = ocrText?.split(whereSeparator: \.isWhitespace).joined(separator: " "), !ocr.isEmpty
             else { return L("Image") }
@@ -63,7 +91,7 @@ struct ClipItem: Identifiable, Codable, Equatable {
 
 /// What a clip is, each with its own SF Symbol and system color.
 enum ClipKind: CaseIterable {
-    case text, link, image, code, color, email
+    case text, link, image, file, code, color, email
 
     var label: String {
         switch self {
@@ -73,6 +101,7 @@ enum ClipKind: CaseIterable {
         case .code: L("Code")
         case .color: L("Colors")
         case .email: L("Email")
+        case .file: L("Files")
         }
     }
 
@@ -84,6 +113,7 @@ enum ClipKind: CaseIterable {
         case .code: L("Code")
         case .color: L("Color")
         case .email: L("Email address")
+        case .file: L("File")
         }
     }
 
@@ -95,6 +125,7 @@ enum ClipKind: CaseIterable {
         case .code: "chevron.left.forwardslash.chevron.right"
         case .color: "paintpalette.fill"
         case .email: "envelope.fill"
+        case .file: "doc.fill"
         }
     }
 
@@ -106,6 +137,7 @@ enum ClipKind: CaseIterable {
         case .code: Color(nsColor: .systemOrange)
         case .color: Color(nsColor: .systemPink)
         case .email: Color(nsColor: .systemTeal)
+        case .file: Color(nsColor: .systemIndigo)
         }
     }
 }
@@ -113,6 +145,7 @@ enum ClipKind: CaseIterable {
 final class ClipStore: ObservableObject {
     static let maxTextBytes = 1_000_000
     static let maxImageBytes = 20_000_000
+    static let maxRichBytes = 2_000_000
 
     @Published private(set) var items: [ClipItem] = []
     let dir: URL
@@ -178,7 +211,7 @@ final class ClipStore: ObservableObject {
 
     /// Reads the text in a copied image with Apple's on-device Vision, so screenshots become searchable.
     func recognizeText(in item: ClipItem) {
-        guard Settings.shared.recognizeText, let url = fileURL(item.imageFile) else { return }
+        guard Settings.shared.recognizeText, let url = fileURL(item.imageFile) ?? item.imageFileURL else { return }
         let id = item.id
         ocrQueue.async {
             let request = VNRecognizeTextRequest()
@@ -213,10 +246,25 @@ final class ClipStore: ObservableObject {
 
         let app = NSWorkspace.shared.frontmostApplication
         if let id = app?.bundleIdentifier, Settings.shared.excludedApps.contains(id) { return }
-        if let s = pb.string(forType: .string), !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        // Files first: Finder also puts their names on the pasteboard as plain text.
+        if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+           !urls.isEmpty {
+            let paths = urls.map(\.path)
+            if let i = items.firstIndex(where: { $0.filePaths == paths }) { promote(at: i); return }
+            let item = ClipItem(appBundleID: app?.bundleIdentifier, appName: app?.localizedName, filePaths: paths)
+            insert(item)
+            recognizeText(in: item)
+        } else if let s = pb.string(forType: .string), !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             guard s.utf8.count <= Self.maxTextBytes else { return }
-            if let i = items.firstIndex(where: { $0.text == s }) { promote(at: i); return }
-            insert(ClipItem(text: s, appBundleID: app?.bundleIdentifier, appName: app?.localizedName))
+            let rtf = pb.data(forType: .rtf).flatMap { $0.count <= Self.maxRichBytes ? $0 : nil }
+            let html = pb.data(forType: .html).flatMap { $0.count <= Self.maxRichBytes ? $0 : nil }
+            if let i = items.firstIndex(where: { $0.text == s }) {
+                if rtf != nil || html != nil { items[i].rtf = rtf; items[i].html = html }
+                promote(at: i)
+                if i == 0 { save() }
+                return
+            }
+            insert(ClipItem(text: s, appBundleID: app?.bundleIdentifier, appName: app?.localizedName, rtf: rtf, html: html))
         } else if let img = NSImage(pasteboard: pb), let png = img.pngData, png.count <= Self.maxImageBytes {
             let hash = SHA256.hash(data: png).map { String(format: "%02x", $0) }.joined()
             if let i = items.firstIndex(where: { $0.imageHash == hash }) { promote(at: i); return }
@@ -252,11 +300,18 @@ final class ClipStore: ObservableObject {
         save()
     }
 
-    func copyToPasteboard(_ item: ClipItem, promote shouldPromote: Bool = true) {
+    /// Puts an item back on the system clipboard; `plain` drops its formatting.
+    func copyToPasteboard(_ item: ClipItem, promote shouldPromote: Bool = true, plain: Bool = false) {
         let pb = NSPasteboard.general
         pb.clearContents()
-        if let t = item.text {
+        if item.isFile {
+            pb.writeObjects(item.fileURLs.filter { FileManager.default.fileExists(atPath: $0.path) } as [NSURL])
+        } else if let t = item.text {
             pb.setString(t, forType: .string)
+            if !plain {
+                if let rtf = item.rtf { pb.setData(rtf, forType: .rtf) }
+                if let html = item.html { pb.setData(html, forType: .html) }
+            }
         } else if let img = image(for: item) {
             pb.writeObjects([img])
         }
@@ -302,6 +357,27 @@ final class ClipStore: ObservableObject {
         guard let img = NSImage(contentsOf: url) else { return nil }
         imageCache.setObject(img, forKey: f as NSString)
         return img
+    }
+
+    private let fileThumbCache = NSCache<NSString, NSImage>()
+
+    /// A small thumbnail for image files, else the Finder icon. Cached per path.
+    func fileThumbnail(for item: ClipItem) -> NSImage? {
+        guard let url = item.fileURLs.first else { return nil }
+        if let cached = fileThumbCache.object(forKey: url.path as NSString) { return cached }
+        var thumb: NSImage?
+        if item.imageFileURL != nil, let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+           let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, [
+               kCGImageSourceCreateThumbnailFromImageAlways: true,
+               kCGImageSourceThumbnailMaxPixelSize: 96,
+               kCGImageSourceCreateThumbnailWithTransform: true,
+           ] as CFDictionary) {
+            thumb = NSImage(cgImage: cg, size: .zero)
+        } else if FileManager.default.fileExists(atPath: url.path) {
+            thumb = NSWorkspace.shared.icon(forFile: url.path)
+        }
+        if let thumb { fileThumbCache.setObject(thumb, forKey: url.path as NSString) }
+        return thumb
     }
 
     func appIcon(for item: ClipItem) -> NSImage? {
@@ -358,6 +434,7 @@ final class PickerModel: ObservableObject {
     var onChoose: (ClipItem, Bool) -> Void = { _, _ in }
     var onResize: () -> Void = {}
     var onOpenSettings: () -> Void = {}
+    var onPastePlain: (ClipItem) -> Void = { _ in }
 
     init(store: ClipStore) { self.store = store }
 
@@ -380,7 +457,7 @@ final class PickerModel: ObservableObject {
         let items = kindFilter.map { kind in store.items.filter { $0.kind == kind } } ?? store.items
         guard !q.isEmpty else { return items }
         return items.filter {
-            ($0.text ?? "afbeelding image screenshot \($0.ocrText ?? "")").localizedCaseInsensitiveContains(q)
+            $0.searchText.localizedCaseInsensitiveContains(q)
                 || ($0.appName ?? "").localizedCaseInsensitiveContains(q)
         }
     }
@@ -612,7 +689,13 @@ struct PickerView: View {
                             }
                             .contextMenu {
                                 Button("Paste") { model.onChoose(item, true) }
+                                if item.hasFormatting {
+                                    Button("Paste Without Formatting") { model.onPastePlain(item) }
+                                }
                                 Button("Copy") { copy(item, at: idx) }
+                                if item.isFile {
+                                    Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting(item.fileURLs) }
+                                }
                                 if let ocr = item.ocrText, !ocr.isEmpty {
                                     Button("Copy Text from Image") {
                                         NSPasteboard.general.clearContents()
@@ -789,7 +872,7 @@ struct ClipRow: View {
     let hovered: Bool
     let store: ClipStore
 
-    private var iconSize: CGFloat { compact ? 18 : 28 }
+    private var iconSize: CGFloat { compact ? 20 : 28 }
 
     var body: some View {
         HStack(spacing: compact ? 8 : 10) {
@@ -828,8 +911,27 @@ struct ClipRow: View {
         )
     }
 
-    @ViewBuilder private var thumbnail: some View {
-        if let img = store.image(for: item) {
+    /// The kind icon or thumbnail, with the source app's icon tucked into its corner like Spotlight does.
+    private var thumbnail: some View {
+        baseThumbnail.overlay(alignment: .bottomTrailing) {
+            if let icon = store.appIcon(for: item) {
+                Image(nsImage: icon)
+                    .resizable()
+                    .frame(width: compact ? 11 : 15, height: compact ? 11 : 15)
+                    .shadow(color: .black.opacity(0.25), radius: 1, y: 0.5)
+                    .offset(x: compact ? 3 : 4, y: compact ? 3 : 4)
+            }
+        }
+    }
+
+    @ViewBuilder private var baseThumbnail: some View {
+        if item.isFile, let thumb = store.fileThumbnail(for: item) {
+            Image(nsImage: thumb)
+                .resizable()
+                .scaledToFill()
+                .frame(width: iconSize, height: iconSize)
+                .clipShape(RoundedRectangle(cornerRadius: compact ? 4 : 6, style: .continuous))
+        } else if let img = store.image(for: item) {
             Image(nsImage: img)
                 .resizable()
                 .scaledToFill()
@@ -893,7 +995,17 @@ struct PreviewPane: View {
                     .padding(.bottom, 3)
                     meta(L("Source"), item.appName ?? L("Unknown"))
                     meta(L("Copied"), item.date.formatted(date: .abbreviated, time: .shortened))
-                    if let t = item.text {
+                    if item.isFile {
+                        let urls = item.fileURLs
+                        if urls.count > 1 { meta(L("Content"), L("%d files", urls.count)) }
+                        meta(L("Location"), (urls[0].deletingLastPathComponent().path as NSString).abbreviatingWithTildeInPath)
+                        if let size = (try? urls[0].resourceValues(forKeys: [.fileSizeKey]))?.fileSize {
+                            meta(L("Size"), ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))
+                        } else if !FileManager.default.fileExists(atPath: urls[0].path) {
+                            meta(L("Status"), L("File no longer exists"))
+                        }
+                    } else if let t = item.text {
+                        if item.hasFormatting { meta(L("Formatting"), L("Kept · ⌥↩ pastes without")) }
                         let lines = t.split(separator: "\n", omittingEmptySubsequences: false).count
                         meta(L("Content"), lines == 1 ? L("%d characters · 1 line", t.count) : L("%d characters · %d lines", t.count, lines))
                     } else if let img = store.image(for: item) {
@@ -911,7 +1023,24 @@ struct PreviewPane: View {
     }
 
     @ViewBuilder private var content: some View {
-        if let item, let img = store.image(for: item) {
+        if let item, item.isFile {
+            VStack(spacing: 10) {
+                if let url = item.imageFileURL, let img = NSImage(contentsOf: url) {
+                    Image(nsImage: img)
+                        .resizable()
+                        .scaledToFit()
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
+                } else if let icon = store.fileThumbnail(for: item) {
+                    Image(nsImage: icon).resizable().frame(width: 128, height: 128)
+                }
+                Text(item.oneLine)
+                    .font(.system(size: 13, weight: .medium))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(20)
+        } else if let item, let img = store.image(for: item) {
             Image(nsImage: img)
                 .resizable()
                 .scaledToFit()
@@ -929,6 +1058,13 @@ struct PreviewPane: View {
                 Text(item.oneLine.uppercased())
                     .font(.system(size: 15, weight: .medium, design: .monospaced))
             }
+        } else if let item, let rich = Self.formatted(item) {
+            ScrollView {
+                Text(rich)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(18)
+            }
         } else if let item, let text = item.text {
             ScrollView {
                 Text(String(text.prefix(8000)))
@@ -942,6 +1078,13 @@ struct PreviewPane: View {
         } else {
             Color.clear
         }
+    }
+
+    /// The RTF rendered as it will paste; skipped for very large documents to keep the preview instant.
+    private static func formatted(_ item: ClipItem) -> AttributedString? {
+        guard let rtf = item.rtf, rtf.count < 200_000,
+              let ns = NSAttributedString(rtf: rtf, documentAttributes: nil) else { return nil }
+        return try? AttributedString(ns, including: \.appKit)
     }
 
     private func meta(_ key: String, _ value: String) -> some View {
@@ -1033,6 +1176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         model.onChoose = { [weak self] item, paste in self?.choose(item, paste: paste) }
         model.onResize = { [weak self] in self?.layoutPanel() }
         model.onOpenSettings = { [weak self] in self?.openSettings() }
+        model.onPastePlain = { [weak self] item in self?.choose(item, paste: true, plain: true) }
 
         hotKey = HotKey { [weak self] in self?.toggle() }
         registerShortcut()
@@ -1171,7 +1315,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         case kVK_Tab:
             model.expanded.toggle()
         case kVK_Return, kVK_ANSI_KeypadEnter:
-            if let item = model.selected { choose(item, paste: !e.modifierFlags.contains(.shift)) }
+            if let item = model.selected {
+                choose(item, paste: !e.modifierFlags.contains(.shift), plain: e.modifierFlags.contains(.option))
+            }
         case kVK_Delete where cmd && e.modifierFlags.contains(.shift):
             if !store.items.isEmpty { model.confirmingClear = true }
         case kVK_Delete where cmd:
@@ -1184,8 +1330,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         return true
     }
 
-    func choose(_ item: ClipItem, paste: Bool) {
-        store.copyToPasteboard(item)
+    func choose(_ item: ClipItem, paste: Bool, plain: Bool = false) {
+        store.copyToPasteboard(item, plain: plain)
         hide()
         // The panel never activates this app, so the previous app is still frontmost and receives ⌘V.
         guard paste, AXIsProcessTrusted() else { return }
