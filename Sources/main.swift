@@ -443,8 +443,7 @@ struct PickerView: View {
     @ObservedObject var store: ClipStore
     @FocusState private var searchFocused: Bool
     @State private var hoveredID: UUID?
-    /// Whether the list has more above / below its visible part; drives the edge fades.
-    @State private var moreAbove = false
+    /// Whether the list has more below its visible part; drives the bottom fade.
     @State private var moreBelow = false
 
     static let cardRadius: CGFloat = 24
@@ -616,14 +615,10 @@ struct PickerView: View {
                 .padding(.vertical, 4)
             }
             .scrollIndicators(model.expanded ? .automatic : .never)
-            .onScrollGeometryChange(for: [Bool].self) { geo in
-                [geo.contentOffset.y > 2,
-                 geo.contentOffset.y + geo.containerSize.height < geo.contentSize.height - 2]
-            } action: { _, edges in
-                withAnimation(.easeOut(duration: 0.15)) {
-                    moreAbove = edges[0]
-                    moreBelow = edges[1]
-                }
+            .onScrollGeometryChange(for: Bool.self) { geo in
+                geo.contentOffset.y + geo.containerSize.height < geo.contentSize.height - 2
+            } action: { _, more in
+                withAnimation(.easeOut(duration: 0.15)) { moreBelow = more }
             }
             .mask(edgeFade)
             .onChange(of: model.selection) {
@@ -636,14 +631,12 @@ struct PickerView: View {
         }
     }
 
-    /// Soft fades at the list edges that only appear when there is more to scroll to.
+    /// A faint fade along the bottom edge, only while there is more to scroll to.
     private var edgeFade: some View {
         VStack(spacing: 0) {
-            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
-                .frame(height: moreAbove ? 18 : 0)
             Color.black
-            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
-                .frame(height: moreBelow ? 28 : 0)
+            LinearGradient(colors: [.black, .black.opacity(0.35)], startPoint: .top, endPoint: .bottom)
+                .frame(height: moreBelow ? 22 : 0)
         }
     }
 
