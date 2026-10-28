@@ -1,72 +1,113 @@
-# Control+C
+<p align="center">
+  <img src="docs/screenshot-compact.png" width="420" alt="Control+C popup with recent clipboard items">
+</p>
 
-Met Control+C zie je je klembordgeschiedenis meteen voor je. Druk op **⌘↩** (Command + Enter), waar je ook bent, en er verschijnt een klein menu onder je tekstcursor met wat je de afgelopen tijd hebt gekopieerd. Je hoeft geen Spotlight te openen of eerst op een icoontje te klikken.
+<h1 align="center">Control+C</h1>
 
-## Installeren
+<p align="center">
+  Your clipboard history, one shortcut away.<br>
+  A small, native macOS app built with SwiftUI and Liquid Glass.
+</p>
 
-Je hebt nodig: macOS 26 (Tahoe) of nieuwer, en de Command Line Tools van Xcode.
+<p align="center">
+  <a href="README.nl.md">Nederlands</a>
+</p>
+
+---
+
+Press **⌘↩** anywhere and a compact popup appears right under your text cursor, showing what you copied recently. Pick an item and it pastes straight into the app you were typing in. You don't have to open Spotlight or click an icon first.
+
+## Features
+
+- **Instant:** opens at your text cursor with no animation and no delay.
+- **Search everything,** including the text inside screenshots. Copied images are read on your Mac with Apple Vision.
+- **Sorted by kind:** text, links, images, code, colors and email addresses each get their own color, and you can filter on them.
+- **Preview:** press Tab for a larger view with a full preview, source app and details.
+- **Your shortcut:** pick any key combination in Settings.
+- **Private:** nothing ever leaves your Mac, and secrets from password managers are never stored.
+
+<p align="center">
+  <img src="docs/screenshot-expanded.png" width="720" alt="Expanded view with preview pane">
+</p>
+
+## Install
+
+Requires **macOS 26 (Tahoe)** or later and the Xcode Command Line Tools:
 
 ```bash
 xcode-select --install
 ```
 
-Haal daarna de repo op en bouw de app:
+Then build and install:
 
 ```bash
-git clone <repo-url> Control-C
-cd Control-C
+git clone https://github.com/SvenwifAI/control-c.git
+cd control-c
 ./build.sh
 ```
 
-`build.sh` bouwt de app uit de broncode in `Sources/`, zet hem in `/Applications/ControlC.app` en start hem. Er wordt niets gedownload.
+`build.sh` compiles the app from `Sources/`, installs it as `/Applications/ControlC.app` and starts it. Nothing is downloaded.
 
-**Automatisch plakken:** de eerste keer vraagt macOS om toegang via Systeeminstellingen → Privacy en beveiliging → **Toegankelijkheid**. Zet Control+C daar aan. Zonder die toegang wordt een item alleen gekopieerd en plak je zelf met ⌘V. De app opent dan ook bij je muis in plaats van bij je tekstcursor.
+**Pasting for you:** the first time, macOS asks for access under System Settings → Privacy & Security → **Accessibility**. Turn Control+C on there. Without it, choosing an item only copies it, so you paste it yourself with ⌘V. The popup then also opens at your mouse instead of your text cursor.
 
-**Instellingen:** klik op het klembord-icoon in de menubalk en kies *Instellingen…*, of druk op `⌘,` in de popup. Daar kies je je eigen sneltoets, hoeveel items hij bewaart en hoe lang, welke apps hij moet negeren, en of hij moet starten bij inloggen.
+**Settings:** choose *Settings…* from the clipboard icon in the menu bar, or press `⌘,` or the gear in the popup. You can set your shortcut, how many items to keep and for how long, apps to ignore, and whether Control+C starts at login.
 
-## Gebruik
+> The interface is in Dutch for now.
 
-| | |
+## Keyboard
+
+| Key | Action |
 |---|---|
-| `⌘↩` | Popup openen of sluiten |
-| Typen | Zoeken |
-| `↑` `↓` | Item kiezen |
-| `↩` of dubbelklik | Plakken in de app waar je was |
-| `⇧↩` of één klik | Alleen kopiëren |
-| `⌘1` … `⌘9` | Item 1 t/m 9 meteen plakken |
-| `⌘←` `⌘→` of de filterknoppen | Alleen tekst, links, afbeeldingen, code, kleuren of e-mailadressen |
-| `tab` of het pijltjesknopje | Grote weergave met voorbeeld |
-| `⌘⌫`, × of rechtermuisklik | Item verwijderen |
-| `⌘Z` | Verwijderen ongedaan maken |
-| `⇧⌘⌫` | Alles wissen (vraagt eerst om bevestiging) |
-| `⌘,` | Instellingen |
-| `esc` | Sluiten |
+| `⌘↩` | Open or close the popup |
+| Type | Search, including text in images |
+| `↑` `↓` | Move the selection |
+| `↩` or double-click | Paste into the app you were in |
+| `⇧↩` or single click | Copy only |
+| `⌘1` … `⌘9` | Paste item 1 to 9 directly |
+| `⌘←` `⌘→` | Filter by kind |
+| `Tab` | Larger view with preview |
+| `⌘⌫` | Delete item (also × on hover, or right-click) |
+| `⌘Z` | Undo delete |
+| `⇧⌘⌫` | Clear everything (asks first) |
+| `⌘,` | Settings |
+| `esc` | Close |
 
-**Zoeken in screenshots:** in gekopieerde afbeeldingen wordt de tekst herkend, zodat je daar ook in kunt zoeken. Met een rechtermuisklik op een afbeelding kopieer je die tekst. Dit gebeurt met Apple Vision op je eigen Mac. Uitzetten kan in Instellingen.
+You can drag the popup by any empty spot.
 
-## Privacy en veiligheid
+## Privacy and security
 
-- **Alles blijft op je Mac.** De app maakt geen internetverbinding.
-- **Wachtwoorden uit wachtwoordmanagers** (1Password, iCloud-sleutelhanger, Bitwarden en andere apps die hun kopieën als geheim markeren) worden niet opgeslagen.
-- **Je geschiedenis staat in** `~/Library/Application Support/ControlC/`. Alleen jouw gebruikersaccount kan die map lezen en hij gaat niet mee in Time Machine-backups.
-- **Items verlopen na 7 dagen** zonder gebruik, en er worden hooguit 60 items bewaard. Beide kun je aanpassen in Instellingen (1, 7 of 30 dagen; 20 tot 200 items). Teksten groter dan 1 MB en afbeeldingen groter dan 20 MB worden niet bewaard.
-- **Apps uitsluiten:** wat je kopieert in apps die je in Instellingen uitsluit, wordt nooit bewaard.
-- **Let op:** wat je zonder wachtwoordmanager kopieert, bijvoorbeeld een wachtwoord uit een notitie of een 2FA-code, komt wel in de geschiedenis. Verwijder zo'n item met `⌘⌫`.
-- De toestemming voor Toegankelijkheid gebruikt de app alleen om je tekstcursor te vinden en om ⌘V te versturen.
-- **Gebruik alleen een versie die je zelf hebt gebouwd.** Neem geen kant-en-klare `.app` van iemand anders over: die kun je niet controleren en hij krijgt wel toegang tot je klembord en tot Toegankelijkheid.
+- **Everything stays on your Mac.** The app makes no network connections.
+- **Password manager secrets are skipped.** That covers 1Password, iCloud Keychain, Bitwarden and other apps that mark what they copy as concealed.
+- **Your history lives in** `~/Library/Application Support/ControlC/`. Only your user account can read that folder, and it is excluded from Time Machine.
+- **Items expire after 7 days** without use, and at most 60 are kept. Both are adjustable in Settings. Text over 1 MB and images over 20 MB are never stored.
+- **Excluded apps:** nothing you copy in apps you exclude in Settings is ever stored.
+- **Heads-up:** text you copy from somewhere other than a password manager, such as a password in a note or a 2FA code, *is* kept. Delete it with `⌘⌫`.
+- Accessibility access is used only to find your text cursor and to send ⌘V.
+- **Only run a build you made yourself** from this source. A prebuilt `.app` from someone else can't be verified, yet it would get access to your clipboard and to Accessibility.
 
-## Sneltoets aanpassen
+## Keep Accessibility access across rebuilds (optional)
 
-⌘↩ verstuurt ook berichten in apps als Slack, Teams en Claude. Kies in Instellingen een andere combinatie: klik op de sneltoets en druk de nieuwe in, bijvoorbeeld ⌥V of ⌘⇧V.
+macOS ties the Accessibility permission to the app's code signature. Without a stable certificate, you have to turn the permission back on after every `./build.sh`. Create a code-signing certificate named **Control+C Signing** in Keychain Access (Certificate Assistant → Create a Certificate → type *Code Signing*). `build.sh` then uses it automatically and the permission sticks.
 
-## Toestemming na elke nieuwe versie (optioneel)
-
-macOS koppelt de Toegankelijkheid-toestemming aan de handtekening van de app. Zonder eigen certificaat moet je die toestemming daarom na elke `./build.sh` opnieuw aanzetten. Maak je in Sleutelhangertoegang een eigen certificaat voor codeondertekening met de naam **Control+C Signing** (Certificaatassistent → Maak een certificaat aan → type *Codeondertekening*), dan gebruikt `build.sh` dat automatisch en blijft de toestemming geldig.
-
-## Verwijderen
+## Uninstall
 
 ```bash
 pkill -x ControlC; rm -rf /Applications/ControlC.app ~/Library/Application\ Support/ControlC
 ```
 
-Haal Control+C daarna ook weg uit Toegankelijkheid en uit je inlogonderdelen.
+Then remove Control+C from Accessibility and from your Login Items.
+
+## Project layout
+
+| Path | What's there |
+|---|---|
+| `Sources/main.swift` | Clipboard store, popup UI, global shortcut, app delegate |
+| `Sources/Settings.swift` | Preferences and the Settings window |
+| `Sources/Demo.swift` | Sample data for screenshots (built only with `-D DEMO`) |
+| `Scripts/make-icon.swift` | Renders `Resources/AppIcon.icns` |
+| `Scripts/screenshot.sh` | Regenerates the images in `docs/` from sample data |
+| `build.sh` | Builds, signs, installs and launches the app |
+
+## License
+
+[MIT](LICENSE)

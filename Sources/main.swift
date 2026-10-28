@@ -126,6 +126,10 @@ final class ClipStore: ObservableObject {
     init() {
         dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("ControlC", isDirectory: true)
+        #if DEMO
+        items = Self.demoItems
+        return
+        #endif
         // Owner-only, and kept out of Time Machine: the history can contain anything you copied.
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
                                                  attributes: [.posixPermissions: 0o700])
@@ -141,6 +145,9 @@ final class ClipStore: ObservableObject {
     private var historyURL: URL { dir.appendingPathComponent("history.json") }
 
     func start() {
+        #if DEMO
+        return
+        #endif
         poll()
         items.filter { $0.isImage && $0.ocrText == nil }.forEach(recognizeText(in:))
         let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.poll() }
@@ -315,6 +322,9 @@ final class ClipStore: ObservableObject {
     }
 
     private func save() {
+        #if DEMO
+        return
+        #endif
         guard let data = try? JSONEncoder().encode(items) else { return }
         try? data.write(to: historyURL, options: .atomic)
     }
@@ -459,7 +469,6 @@ struct PickerView: View {
                 HStack(spacing: 8) {
                     searchField
                     expandButton
-                    settingsButton
                 }
                 card
             }
@@ -501,16 +510,16 @@ struct PickerView: View {
         .help(model.expanded ? "Verkleinen (tab)" : "Vergroten met voorbeeld (tab)")
     }
 
+    /// Small and quiet, at the far right of the filter row.
     private var settingsButton: some View {
         Button { model.onOpenSettings() } label: {
             Image(systemName: "gearshape")
-                .font(.system(size: 15, weight: .medium))
+                .font(.system(size: 12.5, weight: .medium))
                 .foregroundStyle(.secondary)
-                .frame(width: Self.searchHeight, height: Self.searchHeight)
-                .contentShape(Circle())
+                .frame(width: 24, height: 22)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .glassSurface(Circle(), interactive: true)
         .help("Instellingen (⌘,)")
     }
 
@@ -545,6 +554,7 @@ struct PickerView: View {
             scopeButton(nil)
             ForEach(model.availableKinds, id: \.self) { scopeButton($0) }
             Spacer(minLength: 0)
+            settingsButton
         }
         .padding(.horizontal, 10)
         .padding(.top, 10)
@@ -1031,11 +1041,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         settings.onLimitsChange = { [weak self] in self?.store.applyLimits() }
         setupStatusItem()
 
-        #if SCREENSHOT_TEST
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.show() }
-        #endif
-        #if SETTINGS_TEST
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.openSettings() }
+        #if DEMO
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.showDemo() }
         #endif
 
         if !AXIsProcessTrusted(), !UserDefaults.standard.bool(forKey: "askedAccessibility") {
