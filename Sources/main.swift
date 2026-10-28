@@ -19,17 +19,83 @@ struct ClipItem: Identifiable, Codable, Equatable {
 
     var isImage: Bool { imageFile != nil }
 
-    var isLink: Bool {
+    var kind: ClipKind {
+        guard let text else { return .image }
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if swatch != nil { return .color }
+        if !t.contains(where: \.isWhitespace) {
+            if let scheme = URL(string: t)?.scheme?.lowercased(), scheme == "http" || scheme == "https" { return .link }
+            if t.wholeMatch(of: #/[^@\s]+@[^@\s]+\.[A-Za-z]{2,}/#) != nil { return .email }
+        }
+        let head = text.prefix(4000)
+        let markers = ["{", "}", ";", "=>", "func ", "def ", "const ", "import ", "</", "$ ", "()"]
+        return markers.filter { head.contains($0) }.count >= 2 ? .code : .text
+    }
+
+    /// The color a copied hex value like "#FF6A00" describes.
+    var swatch: Color? {
         guard let t = text?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !t.contains(where: \.isWhitespace),
-              let scheme = URL(string: t)?.scheme?.lowercased() else { return false }
-        return scheme == "http" || scheme == "https"
+              let m = t.wholeMatch(of: #/\#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{3})/#) else { return nil }
+        var hex = String(m.1)
+        if hex.count == 3 { hex = hex.map { "\($0)\($0)" }.joined() }
+        guard let v = UInt32(hex, radix: 16) else { return nil }
+        return Color(red: Double((v >> 16) & 0xFF) / 255, green: Double((v >> 8) & 0xFF) / 255,
+                     blue: Double(v & 0xFF) / 255)
     }
 
     var oneLine: String {
         guard let text else { return "Afbeelding" }
         let collapsed = text.prefix(300).split(whereSeparator: \.isWhitespace).joined(separator: " ")
         return collapsed.isEmpty ? "(witruimte)" : collapsed
+    }
+}
+
+/// What a clip is, each with its own SF Symbol and system color.
+enum ClipKind: CaseIterable {
+    case text, link, image, code, color, email
+
+    var label: String {
+        switch self {
+        case .text: "Tekst"
+        case .link: "Links"
+        case .image: "Afbeeldingen"
+        case .code: "Code"
+        case .color: "Kleuren"
+        case .email: "E-mail"
+        }
+    }
+
+    var singular: String {
+        switch self {
+        case .text: "Tekst"
+        case .link: "Link"
+        case .image: "Afbeelding"
+        case .code: "Code"
+        case .color: "Kleur"
+        case .email: "E-mailadres"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .text: "text.alignleft"
+        case .link: "link"
+        case .image: "photo"
+        case .code: "chevron.left.forwardslash.chevron.right"
+        case .color: "paintpalette.fill"
+        case .email: "envelope.fill"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .text: Color(nsColor: .systemGray)
+        case .link: Color(nsColor: .systemBlue)
+        case .image: Color(nsColor: .systemPurple)
+        case .code: Color(nsColor: .systemOrange)
+        case .color: Color(nsColor: .systemPink)
+        case .email: Color(nsColor: .systemTeal)
+        }
     }
 }
 
@@ -240,10 +306,25 @@ final class PickerModel: ObservableObject {
 
     init(store: ClipStore) { self.store = store }
 
+    @Published var kindFilter: ClipKind? { didSet { selection = 0 } }
+
+    var availableKinds: [ClipKind] {
+        let present = Set(store.items.map(\.kind))
+        return ClipKind.allCases.filter(present.contains)
+    }
+
+    /// ⌘← / ⌘→ steps through "Alles" and the kinds present.
+    func stepKindFilter(_ delta: Int) {
+        let scopes: [ClipKind?] = [nil] + availableKinds
+        let i = scopes.firstIndex(of: kindFilter) ?? 0
+        kindFilter = scopes[(i + delta + scopes.count) % scopes.count]
+    }
+
     var filtered: [ClipItem] {
         let q = query.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else { return store.items }
-        return store.items.filter {
+        let items = kindFilter.map { kind in store.items.filter { $0.kind == kind } } ?? store.items
+        guard !q.isEmpty else { return items }
+        return items.filter {
             ($0.text ?? "afbeelding image").localizedCaseInsensitiveContains(q)
                 || ($0.appName ?? "").localizedCaseInsensitiveContains(q)
         }
@@ -328,6 +409,7 @@ struct PickerView: View {
         let items = model.filtered
         VStack(spacing: 0) {
             searchBar
+            kindBar
             Divider().opacity(0.5)
             if items.isEmpty {
                 emptyState
@@ -381,6 +463,38 @@ struct PickerView: View {
         }
         .padding(.horizontal, 12)
         .frame(height: model.expanded ? 46 : 38)
+    }
+
+    /// Scope bar: "Alles" plus one capsule per kind present. Glyph-only when compact.
+    private var kindBar: some View {
+        HStack(spacing: 4) {
+            scopeButton(nil)
+            ForEach(model.availableKinds, id: \.self) { scopeButton($0) }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .padding(.bottom, 6)
+    }
+
+    private func scopeButton(_ kind: ClipKind?) -> some View {
+        let active = model.kindFilter == kind
+        let tint = kind?.tint ?? Color.primary
+        return Button { model.kindFilter = kind } label: {
+            HStack(spacing: 4) {
+                if let kind { Image(systemName: kind.symbol).font(.system(size: 11, weight: .semibold)) }
+                if kind == nil || model.expanded { Text(kind?.label ?? "Alles") }
+            }
+            .font(.system(size: 11.5, weight: .medium))
+            .foregroundStyle(active ? (kind == nil ? Color.primary : Color.white) : (kind == nil ? Color.secondary : tint))
+            .padding(.horizontal, kind == nil || model.expanded ? 9 : 7)
+            .frame(height: 22)
+            .background(
+                Capsule().fill(active ? (kind == nil ? Color.primary.opacity(0.12) : tint) : Color.primary.opacity(0.05))
+            )
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(kind?.label ?? "Alles")
     }
 
     private func list(_ items: [ClipItem]) -> some View {
@@ -569,7 +683,7 @@ struct ClipRow: View {
                     .font(.system(size: 13, weight: compact ? .regular : .medium))
                     .lineLimit(1)
                 if !compact {
-                    Text([item.appName, relativeTime(item.date)].compactMap { $0 }.joined(separator: " · "))
+                    Text([item.kind.singular, item.appName, relativeTime(item.date)].compactMap { $0 }.joined(separator: " · "))
                         .font(.system(size: 11))
                         .foregroundStyle(selected ? Color.white.opacity(0.75) : Color.secondary)
                         .lineLimit(1)
@@ -605,22 +719,41 @@ struct ClipRow: View {
                 .scaledToFill()
                 .frame(width: iconSize, height: iconSize)
                 .clipShape(RoundedRectangle(cornerRadius: compact ? 4 : 6, style: .continuous))
-        } else if item.isLink {
-            symbol("link")
-        } else if let icon = store.appIcon(for: item) {
-            Image(nsImage: icon).resizable().frame(width: iconSize, height: iconSize)
+                .overlay(iconBorder)
+        } else if let swatch = item.swatch {
+            RoundedRectangle(cornerRadius: compact ? 4.5 : 7, style: .continuous)
+                .fill(swatch)
+                .frame(width: iconSize, height: iconSize)
+                .overlay(iconBorder)
         } else {
-            symbol("text.alignleft")
+            KindIcon(kind: item.kind, size: iconSize, selected: selected)
         }
     }
 
-    private func symbol(_ name: String) -> some View {
-        Image(systemName: name)
-            .font(.system(size: compact ? 10 : 12, weight: .semibold))
-            .frame(width: iconSize, height: iconSize)
+    private var iconBorder: some View {
+        RoundedRectangle(cornerRadius: compact ? 4.5 : 7, style: .continuous)
+            .strokeBorder(selected ? Color.white.opacity(0.6) : Color.primary.opacity(0.15), lineWidth: 0.5)
+    }
+}
+
+/// A Settings-style glyph: white SF Symbol on a rounded square in the kind's system color.
+struct KindIcon: View {
+    let kind: ClipKind
+    let size: CGFloat
+    var selected = false
+
+    var body: some View {
+        Image(systemName: kind.symbol)
+            .font(.system(size: size * 0.5, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
             .background(
-                RoundedRectangle(cornerRadius: compact ? 4.5 : 7, style: .continuous)
-                    .fill(selected ? Color.white.opacity(0.2) : Color.primary.opacity(0.08))
+                RoundedRectangle(cornerRadius: size * 0.25, style: .continuous)
+                    .fill(kind.tint.gradient)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: size * 0.25, style: .continuous)
+                    .strokeBorder(Color.white.opacity(selected ? 0.6 : 0), lineWidth: 0.5)
             )
     }
 }
@@ -635,6 +768,13 @@ struct PreviewPane: View {
             if let item {
                 Divider().opacity(0.6)
                 VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 6) {
+                        KindIcon(kind: item.kind, size: 16)
+                        Text(item.kind.singular)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(item.kind.tint)
+                    }
+                    .padding(.bottom, 3)
                     meta("Bron", item.appName ?? "Onbekend")
                     meta("Gekopieerd", item.date.formatted(date: .abbreviated, time: .shortened))
                     if let t = item.text {
@@ -658,10 +798,22 @@ struct PreviewPane: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
                 .padding(20)
-        } else if let text = item?.text {
+        } else if let item, let swatch = item.swatch {
+            VStack(spacing: 12) {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(swatch)
+                    .frame(width: 140, height: 140)
+                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.5))
+                    .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+                Text(item.oneLine.uppercased())
+                    .font(.system(size: 15, weight: .medium, design: .monospaced))
+            }
+        } else if let item, let text = item.text {
             ScrollView {
                 Text(String(text.prefix(8000)))
-                    .font(.system(size: 13, design: looksLikeCode(text) ? .monospaced : .default))
+                    .font(.system(size: 13, design: item.kind == .code ? .monospaced : .default))
+                    .foregroundStyle(item.kind == .link ? item.kind.tint : Color.primary)
                     .lineSpacing(2)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -678,11 +830,6 @@ struct PreviewPane: View {
             Text(value).foregroundStyle(.secondary).lineLimit(1)
         }
         .font(.system(size: 11.5))
-    }
-
-    private func looksLikeCode(_ t: String) -> Bool {
-        let markers = ["{", "}", ";", "=>", "func ", "def ", "const ", "import ", "</", "$ "]
-        return markers.filter { t.contains($0) }.count >= 2
     }
 }
 
@@ -754,6 +901,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         hotKey = HotKey(keyCode: kVK_Return, modifiers: cmdKey) { [weak self] in self?.toggle() }
         setupStatusItem()
 
+        #if SCREENSHOT_TEST
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.show() }
+        #endif
+
         if !AXIsProcessTrusted(), !UserDefaults.standard.bool(forKey: "askedAccessibility") {
             UserDefaults.standard.set(true, forKey: "askedAccessibility")
             requestAccessibility()
@@ -766,6 +917,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     func show() {
         model.query = ""
+        model.kindFilter = nil
         model.selection = 0
         anchor = Self.textCaretRect() ?? NSRect(origin: NSEvent.mouseLocation, size: .zero)
         layoutPanel()
@@ -779,7 +931,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var panelSize: CGSize {
         if model.expanded { return CGSize(width: 720, height: 440) }
         let rows = CGFloat(min(max(store.items.count, 3), 10))
-        return CGSize(width: 340, height: 38 + 1 + 10 + rows * 26)
+        return CGSize(width: 340, height: 38 + 28 + 1 + 10 + rows * 26)
     }
 
     /// Places the panel just below the anchor, or above it when there is no room, inside the visible screen.
@@ -839,6 +991,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             model.move(-1)
         case kVK_DownArrow:
             model.move(1)
+        case kVK_LeftArrow where cmd:
+            model.stepKindFilter(-1)
+        case kVK_RightArrow where cmd:
+            model.stepKindFilter(1)
         case kVK_Tab:
             model.expanded.toggle()
         case kVK_Return, kVK_ANSI_KeypadEnter:
