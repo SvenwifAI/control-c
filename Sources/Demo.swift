@@ -8,24 +8,36 @@ extension ClipStore {
     static var demoItems: [ClipItem] {
         let now = Date()
         func ago(_ minutes: Double) -> Date { now.addingTimeInterval(-minutes * 60) }
+        let dutch = Bundle.main.preferredLocalizations.first == "nl"
+        let messages = dutch ? "Berichten" : "Messages", notes = dutch ? "Notities" : "Notes"
+        func item(_ text: String, _ minutes: Double, _ bundleID: String, _ app: String) -> ClipItem {
+            ClipItem(text: text, date: ago(minutes), appBundleID: bundleID, appName: app)
+        }
+        if dutch {
+            return [
+                item("https://www.rijksmuseum.nl/nl/bezoeken", 0.2, "com.apple.Safari", "Safari"),
+                item("Zullen we donderdag om 10:00 afspreken? Ik neem het prototype mee.", 3, "com.apple.MobileSMS", messages),
+                item("#FF6A00", 8, "com.apple.Notes", notes),
+                item("const totaal = items.reduce((som, i) => som + i.prijs, 0);", 15, "com.apple.Terminal", "Terminal"),
+                item("hallo@voorbeeld.nl", 26, "com.apple.mail", "Mail"),
+                item("Kwartaalcijfers: omzet 12% hoger dan vorig jaar, vooral door de nieuwe abonnementen.", 42, "com.apple.Notes", notes),
+                item("#34C759", 60, "com.apple.Notes", notes),
+                item("Vergaderruimte 4.12 op de vierde verdieping, naast de koffieautomaat.", 95, "com.apple.MobileSMS", messages),
+                item("https://github.com/SvenwifAI/control-c", 130, "com.apple.Safari", "Safari"),
+                item("Tot morgen! Groetjes, Anne", 200, "com.apple.mail", "Mail"),
+            ]
+        }
         return [
-            ClipItem(text: "https://developer.apple.com/design/human-interface-guidelines/", date: ago(0.2),
-                     appBundleID: "com.apple.Safari", appName: "Safari"),
-            ClipItem(text: "Let's meet Thursday at 10:00. I'll bring the prototype.", date: ago(3),
-                     appBundleID: "com.apple.MobileSMS", appName: "Messages"),
-            ClipItem(text: "#5E5CE6", date: ago(8), appBundleID: "com.apple.Notes", appName: "Notes"),
-            ClipItem(text: "let total = items.reduce(0) { $0 + $1.price }", date: ago(15),
-                     appBundleID: "com.apple.Terminal", appName: "Terminal"),
-            ClipItem(text: "hello@example.com", date: ago(26), appBundleID: "com.apple.mail", appName: "Mail"),
-            ClipItem(text: "Quarterly report: revenue up 12% year over year, driven by the new subscription plans.",
-                     date: ago(42), appBundleID: "com.apple.Notes", appName: "Notes"),
-            ClipItem(text: "#34C759", date: ago(60), appBundleID: "com.apple.Notes", appName: "Notes"),
-            ClipItem(text: "The meeting room is 4.12 on the fourth floor, next to the coffee machine.", date: ago(95),
-                     appBundleID: "com.apple.MobileSMS", appName: "Messages"),
-            ClipItem(text: "https://github.com/SvenwifAI/control-c", date: ago(130),
-                     appBundleID: "com.apple.Safari", appName: "Safari"),
-            ClipItem(text: "func greet(_ name: String) -> String { \"Hello, \\(name)!\" }", date: ago(200),
-                     appBundleID: "com.apple.Terminal", appName: "Terminal"),
+            item("https://developer.apple.com/design/human-interface-guidelines/", 0.2, "com.apple.Safari", "Safari"),
+            item("Let's meet Thursday at 10:00. I'll bring the prototype.", 3, "com.apple.MobileSMS", messages),
+            item("#5E5CE6", 8, "com.apple.Notes", notes),
+            item("let total = items.reduce(0) { $0 + $1.price }", 15, "com.apple.Terminal", "Terminal"),
+            item("hello@example.com", 26, "com.apple.mail", "Mail"),
+            item("Quarterly report: revenue up 12% year over year, driven by the new subscription plans.", 42, "com.apple.Notes", notes),
+            item("#34C759", 60, "com.apple.Notes", notes),
+            item("The meeting room is 4.12 on the fourth floor, next to the coffee machine.", 95, "com.apple.MobileSMS", messages),
+            item("https://github.com/SvenwifAI/control-c", 130, "com.apple.Safari", "Safari"),
+            item("func greet(_ name: String) -> String { \"Hello, \\(name)!\" }", 200, "com.apple.Terminal", "Terminal"),
         ]
     }
 }

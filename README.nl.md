@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/screenshot-compact.nl.png" width="420" alt="Control+C"></p>
+<p align="center"><img src="docs/preview.nl.png" width="860" alt="Control+C: ingeklapt, uitgeklapt en de belangrijkste functies"></p>
 
 # Control+C
 
