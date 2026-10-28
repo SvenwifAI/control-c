@@ -482,6 +482,7 @@ struct PickerView: View {
         }
         .padding(.horizontal, 16)
         .frame(height: Self.searchHeight)
+        .windowDraggable()
         .glassSurface(Capsule())
     }
 
@@ -532,6 +533,7 @@ struct PickerView: View {
         .overlay(alignment: .bottom) { banner.padding(.bottom, model.expanded ? 40 : 8) }
         .animation(.easeOut(duration: 0.15), value: store.lastDeleted?.item.id)
         .animation(.easeOut(duration: 0.15), value: model.confirmingClear)
+        .windowDraggable()
         .glassSurface(RoundedRectangle(cornerRadius: Self.cardRadius, style: .continuous))
     }
 
@@ -704,6 +706,11 @@ struct PickerView: View {
 }
 
 extension View {
+    /// Lets empty space behind this view move the panel; controls on top keep their own clicks.
+    func windowDraggable() -> some View {
+        background(Color.clear.contentShape(Rectangle()).gesture(WindowDragGesture()))
+    }
+
     /// Liquid Glass with a light backing so text stays readable over busy windows.
     func glassSurface<S: Shape>(_ shape: S, interactive: Bool = false) -> some View {
         background(shape.fill(Color(nsColor: .windowBackgroundColor).opacity(0.5)))
@@ -1038,6 +1045,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         model.kindFilter = nil
         model.selection = 0
         anchor = Self.textCaretRect() ?? NSRect(origin: NSEvent.mouseLocation, size: .zero)
+        userMoved = false
         layoutPanel()
         panel.makeKeyAndOrderFront(nil)
         model.focusToken += 1
@@ -1045,6 +1053,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     /// What the panel hangs off: the text caret, or the mouse pointer. Cocoa screen coordinates.
     private var anchor = NSRect.zero
+    /// Set once the user drags the panel; resizing then keeps its top-left corner where they put it.
+    private var userMoved = false
+    private var isLayingOut = false
+
+    func windowDidMove(_ notification: Notification) {
+        if !isLayingOut { userMoved = true }
+    }
 
     private var panelSize: CGSize {
         let m = PickerView.margin * 2
@@ -1062,9 +1077,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         var x = anchor.minX - 10 - PickerView.margin
         var y = anchor.minY - 6 + PickerView.margin - size.height
         if y < vf.minY { y = anchor.maxY + 6 }
+        if userMoved {
+            x = panel.frame.minX
+            y = panel.frame.maxY - size.height
+        }
         x = min(max(x, vf.minX + 8), vf.maxX - size.width - 8)
         y = min(max(y, vf.minY + 8), vf.maxY - size.height - 8)
+        isLayingOut = true
         panel.setFrame(NSRect(x: x, y: y, width: size.width, height: size.height), display: true)
+        isLayingOut = false
     }
 
     /// Bounds of the insertion point in the focused text field of the frontmost app, via Accessibility.
