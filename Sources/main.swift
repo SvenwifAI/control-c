@@ -56,7 +56,8 @@ struct ClipItem: Identifiable, Codable, Equatable {
     var searchText: String {
         if isSensitive { return "" } // a secret must not be findable by guessing its characters
         if isFile { return fileURLs.map(\.lastPathComponent).joined(separator: " ") + " " + (ocrText ?? "") }
-        return text ?? "afbeelding image screenshot \(ocrText ?? "")"
+        // Searching the first 64 KB keeps typing instant even with 1 MB items.
+        return text.map { String($0.prefix(65_536)) } ?? "afbeelding image screenshot \(ocrText ?? "")"
     }
 
     var kind: ClipKind {
@@ -232,6 +233,8 @@ final class ClipStore: ObservableObject {
         isPersistent = key != nil
         load()
         expireOldItems()
+        // Items stored by an older version that the current recognition sees as secrets.
+        if Settings.shared.detectSecrets { purgeSecrets() }
     }
 
     private var historyURL: URL { dir.appendingPathComponent("history.enc") }
@@ -308,14 +311,17 @@ final class ClipStore: ObservableObject {
         let id = item.id
         let stored = item.imageFile != nil ? imageData(item.imageFile) : nil
         let fileURL = item.imageFileURL
-        guard stored != nil || fileURL != nil else { return }
+        guard stored != nil || fileURL != nil else {
+            if let name = item.imageFile { persistImage(name) }
+            return
+        }
         ocrQueue.async {
             let handler: VNImageRequestHandler
             if let stored {
                 handler = VNImageRequestHandler(data: stored)
             } else if let fileURL, Self.isSafeImageFile(fileURL) {
                 handler = VNImageRequestHandler(url: fileURL)
-            } else { return }
+            } else { return } // a copied file: nothing of ours to write
             let request = VNRecognizeTextRequest()
             request.recognitionLevel = .accurate
             request.usesLanguageCorrection = true
@@ -326,7 +332,11 @@ final class ClipStore: ObservableObject {
             DispatchQueue.main.async { [weak self] in
                 guard let self, let i = self.items.firstIndex(where: { $0.id == id }) else { return }
                 self.items[i].ocrText = text
-                if secret, Settings.shared.detectSecrets { self.makeSensitive(at: i) }
+                if secret, Settings.shared.detectSecrets {
+                    self.makeSensitive(at: i)
+                } else if let name = self.items[i].imageFile, self.memoryImages[name] != nil {
+                    self.persistImage(name)
+                }
                 self.save()
             }
         }
@@ -380,9 +390,15 @@ final class ClipStore: ObservableObject {
 
     /// Drops stored items that look like secrets, e.g. after turning recognition back on.
     func purgeSecrets() {
-        let before = items.count
-        items.removeAll { !$0.isSensitive && ($0.text.map(Secrets.looksSecret) ?? false) }
-        if items.count != before { save() }
+        let flagged = items.filter { item in
+            !item.isSensitive && ((item.text.map(Secrets.looksSecret) ?? false)
+                || (item.ocrText.map(Secrets.containsCredential) ?? false))
+        }
+        guard !flagged.isEmpty else { return }
+        let ids = Set(flagged.map(\.id))
+        items.removeAll { ids.contains($0.id) }
+        flagged.forEach(removeFile(of:))
+        save()
     }
 
     /// Drops everything that came from these apps, e.g. after excluding one.
@@ -464,7 +480,6 @@ final class ClipStore: ObservableObject {
 
     /// Checks size before decoding, converts to PNG and encrypts off the main thread, then adds the item.
     private func captureImage(_ raw: Data, appID: String?, appName: String?) {
-        let key = self.key, dir = self.dir
         io.async { [weak self] in
             let source = CGImageSourceCreateWithData(raw as CFData, nil)
             guard let source, let pixels = Self.pixelCount(of: source), pixels <= Self.maxImagePixels else { return }
@@ -480,14 +495,35 @@ final class ClipStore: ObservableObject {
             guard png.count <= Self.maxImageBytes else { return }
             let hash = SHA256.hash(data: png).map { String(format: "%02x", $0) }.joined()
             let name = "\(hash.prefix(24)).enc"
-            let written = key != nil && Self.writeSealed(png, to: dir.appendingPathComponent(name), key: key)
             DispatchQueue.main.async {
                 guard let self else { return }
-                if !written { self.memoryImages[name] = png }
+                // A copy of an image already in the list (secret or not) changes nothing on disk.
                 if let i = self.items.firstIndex(where: { $0.imageHash == hash }) { self.promote(at: i); return }
+                // Kept in memory until it's known not to show a secret; only then written to disk.
+                self.memoryImages[name] = png
                 let item = ClipItem(imageFile: name, imageHash: hash, appBundleID: appID, appName: appName)
                 self.insert(item)
-                self.recognizeText(in: item)
+                if Settings.shared.recognizeText && Settings.shared.detectSecrets {
+                    self.recognizeText(in: item) // writes the image afterwards if it holds no secret
+                } else {
+                    self.persistImage(name)
+                    self.recognizeText(in: item)
+                }
+            }
+        }
+    }
+
+    /// Writes an image that was held in memory, encrypted, once nothing argues against storing it.
+    private func persistImage(_ name: String) {
+        guard let key, let png = memoryImages[name],
+              items.contains(where: { $0.imageFile == name && !$0.isSensitive }) else { return }
+        let url = dir.appendingPathComponent(name)
+        io.async { [weak self] in
+            guard Self.writeSealed(png, to: url, key: key) else { return }
+            DispatchQueue.main.async {
+                guard let self, self.items.contains(where: { $0.imageFile == name && !$0.isSensitive }) else { return }
+                self.memoryImages[name] = nil
+                self.save() // the history can now refer to the file
             }
         }
     }
@@ -527,7 +563,10 @@ final class ClipStore: ObservableObject {
     }
 
     private func promote(at i: Int) {
-        guard i > 0 else { return }
+        guard i > 0 else {
+            if !items.isEmpty { items[0].date = Date(); save() } // still counts as use
+            return
+        }
         var item = items.remove(at: i)
         item.date = Date()
         items.insert(item, at: 0)
@@ -606,6 +645,9 @@ final class ClipStore: ObservableObject {
         imageCache.removeAllObjects()
         saveScheduled = false
         io.sync {} // let pending writes finish before deleting
+        #if DEMO
+        return // the demo must never touch the real history
+        #endif
         let fm = FileManager.default
         for url in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
         where isOwnFile(url.lastPathComponent) {
@@ -631,23 +673,58 @@ final class ClipStore: ObservableObject {
 
     // MARK: Images and icons
 
-    func image(for item: ClipItem) -> NSImage? {
-        guard let f = item.imageFile else { return nil }
-        if let cached = imageCache.object(forKey: f as NSString) { return cached }
-        guard let data = imageData(f), let img = NSImage(data: data) else { return nil }
-        imageCache.setObject(img, forKey: f as NSString)
-        return img
-    }
-
-    /// A small thumbnail of a copied image, for rows.
+    /// A small thumbnail of a copied image, for rows. Returns nil until it has been made off the main thread.
     func thumbnail(for item: ClipItem) -> NSImage? {
         guard let f = item.imageFile else { return nil }
         if let cached = thumbCache.object(forKey: f as NSString) { return cached }
-        guard let data = imageData(f), let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, Self.thumbOptions(96)) else { return nil }
-        let img = NSImage(cgImage: cg, size: .zero)
-        thumbCache.setObject(img, forKey: f as NSString)
-        return img
+        loadImage(f, maxPixels: 96, into: thumbCache)
+        return nil
+    }
+
+    /// The image scaled for the preview pane, made off the main thread like the thumbnails.
+    func previewImage(for item: ClipItem) -> NSImage? {
+        guard let f = item.imageFile else { return nil }
+        if let cached = imageCache.object(forKey: f as NSString) { return cached }
+        loadImage(f, maxPixels: 1600, into: imageCache)
+        return nil
+    }
+
+    /// The original size in pixels, known once a thumbnail or preview has loaded.
+    func imageSize(for item: ClipItem) -> CGSize? { item.imageFile.flatMap { imageSizes[$0] } }
+
+    private var imagesLoading: Set<String> = []
+    private var imageSizes: [String: CGSize] = [:]
+
+    /// Decrypts and scales a stored image in the background, then redraws the rows that show it.
+    private func loadImage(_ name: String, maxPixels: Int, into cache: NSCache<NSString, NSImage>) {
+        let job = "\(maxPixels)|\(name)"
+        guard !imagesLoading.contains(job) else { return }
+        imagesLoading.insert(job)
+        let inMemory = memoryImages[name], key = self.key, url = fileURL(name)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var data = inMemory
+            if data == nil, let url, let raw = try? Data(contentsOf: url) {
+                data = url.pathExtension == "png" ? raw : key.flatMap { Vault.open(raw, with: $0, context: name) }
+            }
+            var image: NSImage?
+            var size: CGSize?
+            if let data, let source = CGImageSourceCreateWithData(data as CFData, nil) {
+                if let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                   let w = props[kCGImagePropertyPixelWidth] as? Int, let h = props[kCGImagePropertyPixelHeight] as? Int {
+                    size = CGSize(width: w, height: h)
+                }
+                if let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, Self.thumbOptions(maxPixels)) {
+                    image = NSImage(cgImage: cg, size: .zero)
+                }
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.imagesLoading.remove(job)
+                if let size { self.imageSizes[name] = size }
+                if let image { cache.setObject(image, forKey: name as NSString) }
+                self.thumbnailVersion += 1
+            }
+        }
     }
 
     private static func thumbOptions(_ size: Int) -> CFDictionary {
@@ -711,7 +788,10 @@ final class ClipStore: ObservableObject {
                 // Wrong key or damaged file: set it aside instead of overwriting it, and start empty.
                 // No cleanup either, since its images may still belong to it.
                 let aside = dir.appendingPathComponent("history-unreadable-\(Int(Date().timeIntervalSince1970)).enc")
-                try? fm.moveItem(at: historyURL, to: aside)
+                if (try? fm.moveItem(at: historyURL, to: aside)) == nil {
+                    self.key = nil // couldn't move it: write nothing rather than overwrite it
+                    isPersistent = false
+                }
                 NSLog("Control+C: history could not be read and was set aside")
                 return
             }
@@ -758,8 +838,10 @@ final class ClipStore: ObservableObject {
     private func removeOrphanedFiles() {
         let used = Set(items.compactMap(\.imageFile))
         let fm = FileManager.default
-        for url in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
-        where fileURL(url.lastPathComponent) != nil && !used.contains(url.lastPathComponent) {
+        let files = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        // Images may belong to a history that was set aside; keep everything while one exists.
+        guard !files.contains(where: { $0.lastPathComponent.hasPrefix("history-unreadable-") }) else { return }
+        for url in files where fileURL(url.lastPathComponent) != nil && !used.contains(url.lastPathComponent) {
             try? fm.removeItem(at: url)
         }
     }
@@ -774,7 +856,7 @@ final class ClipStore: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self, self.saveScheduled else { return }
             self.saveScheduled = false
-            let snapshot = self.items.filter { !$0.isSensitive }, key = self.key, url = self.historyURL
+            let snapshot = self.storedItems, key = self.key, url = self.historyURL
             self.io.async { _ = Self.writeHistory(snapshot, key: key, to: url) }
         }
     }
@@ -786,8 +868,13 @@ final class ClipStore: ObservableObject {
         return true
         #endif
         saveScheduled = false
-        let snapshot = items.filter { !$0.isSensitive }, key = self.key, url = historyURL
+        let snapshot = storedItems, key = self.key, url = historyURL
         return io.sync { Self.writeHistory(snapshot, key: key, to: url) }
+    }
+
+    /// What goes into the history file: no secrets, and no images that are only in memory (yet).
+    private var storedItems: [ClipItem] {
+        items.filter { !$0.isSensitive && ($0.imageFile.map { memoryImages[$0] == nil } ?? true) }
     }
 
     private static func writeHistory(_ items: [ClipItem], key: SymmetricKey?, to url: URL) -> Bool {
@@ -1415,8 +1502,10 @@ struct PreviewPane: View {
                         if item.hasFormatting { meta(L("Formatting"), L("Kept · ⌥↩ copies without")) }
                         let lines = t.split(separator: "\n", omittingEmptySubsequences: false).count
                         meta(L("Content"), lines == 1 ? L("%d characters · 1 line", t.count) : L("%d characters · %d lines", t.count, lines))
-                    } else if let img = store.image(for: item) {
-                        meta(L("Size"), "\(Int(img.size.width)) × \(Int(img.size.height))")
+                    } else if item.isImage {
+                        if let size = store.imageSize(for: item) {
+                            meta(L("Size"), "\(Int(size.width)) × \(Int(size.height))")
+                        }
                         if let ocr = item.ocrText, !ocr.isEmpty {
                             let words = ocr.split(whereSeparator: \.isWhitespace).count
                             meta(L("Text"), L("%d words recognized · right-click to copy", words))
@@ -1460,7 +1549,7 @@ struct PreviewPane: View {
                     .multilineTextAlignment(.center)
             }
             .padding(20)
-        } else if let item, let img = store.image(for: item) {
+        } else if let item, let img = store.previewImage(for: item) {
             Image(nsImage: img)
                 .resizable()
                 .scaledToFit()
@@ -1602,6 +1691,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let me = NSRunningApplication.current
         if NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
             .contains(where: { $0 != me }) {
+            isDuplicate = true
             NSApp.terminate(nil)
             return
         }
@@ -1642,7 +1732,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     private var storageObserver: AnyCancellable?
 
+    /// Set when another copy was already running: this one quits without ever opening the history.
+    private var isDuplicate = false
+
     func applicationWillTerminate(_ notification: Notification) {
+        guard !isDuplicate else { return }
         store.finalizeDelete()
         store.saveNow()
     }

@@ -60,7 +60,7 @@ cd control-c
 - **Wachtwoorden en codes worden herkend en nooit bewaard.** Die staan alleen in het geheugen, worden getoond als `••••••••`, zijn niet doorzoekbaar en verdwijnen na 5 minuten:
   - 2FA-codes, kaartnummers en tekst die op een wachtwoord lijkt, zoals `Zomer2026!` of Apples `xupjo4-gyzZyc-bavkif`
   - API-sleutels en tokens (GitHub, GitLab, Anthropic, OpenAI, Stripe, Slack, AWS, Google en meer), JWT's en privésleutels, ook midden in een langere tekst
-  - configuratieregels zoals `export API_KEY=…` of `Wachtwoord: …`, en links met een wachtwoord erin (`postgres://gebruiker:wachtwoord@host`)
+  - configuratieregels zoals `export API_KEY=…` of `Wachtwoord: …`, en links met een wachtwoord erin (`postgres://app:Hx7k2Lp9@db.example.com`)
   - screenshots waarop een sleutel, token, gelabeld wachtwoord of kaartnummer te lezen is
 
   Plak je een geheim terug, dan wordt het als geheim gemarkeerd en blijft het van het Universele klembord af, zodat andere klembordapps en apparaten het overslaan. Herkenning uitzetten kan in Instellingen.

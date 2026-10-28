@@ -73,7 +73,9 @@ enum Vault {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(query as CFDictionary)
+        // If the old key can't be removed, don't pretend it was replaced: stop writing instead.
+        guard status == errSecSuccess || status == errSecItemNotFound else { return nil }
         return loadKey()
     }
 }
@@ -147,7 +149,8 @@ enum Secrets {
             var rest = word[...]
             while let i = rest.firstIndex(where: { $0 == "=" || $0 == ":" }) {
                 rest = rest[rest.index(after: i)...]
-                if rest.count >= 16 { candidates.append(rest) }
+                if rest.utf8.count >= 16 { candidates.append(rest) } // utf8.count is O(1) on these
+                if candidates.count > 8 { break } // a=a=a=… would otherwise make this quadratic
             }
             for c in candidates {
                 guard let first = c.first else { continue }
@@ -172,6 +175,10 @@ enum Secrets {
     private static let envLabelled = #/[A-Z][A-Z0-9_]{0,40}?(PASSWORD|PASSWD|PWD|SECRET|TOKEN|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY)\s*=\s*(["']?)([^\s"'`,;]+)/#
     /// "Your temporary password is X7#kd92Q", "Je verificatiecode is 482913".
     private static let prose = #/(?i)(password|passcode|passphrase|wachtwoord|pincode|code)\s+(?:is|luidt|was)\s*:?\s*["'`]?([^\s"'`]+)/#
+    /// `curl -u name:password`, `--user name:password`.
+    private static let curlUser = #/(?:^|\s)(?:-u|--user)\s+["']?[^\s:"']+:([^\s"'@]{4,})/#
+    /// A line that is only a password label, as in forms and screenshots: the value is on the next line.
+    private static let bareLabel = #/(?i)\s*(?:password|wachtwoord|passcode|pincode|pin)\s*:?\s*/#
     private static let authHeader = #/(?i)(?:bearer|basic)\s+([A-Za-z0-9._~+\/-]{16,}=*)/#
     private static let bsn = #/(?i)(?:bsn|burgerservicenummer|sofi-?nummer)\b\D{0,5}(\d{4}\.\d{2}\.\d{3}|\d{3} \d{3} \d{3}|\d{9})(?![0-9])/#
     private static let labelWords = ["pass", "pw", "wachtwoord", "secret", "token", "key", "pin", "session", "bearer", "basic",
@@ -198,7 +205,15 @@ enum Secrets {
         let code = ["{", "}", "=>", "->", "();", "func ", "def ", "const ", "let ", "var ", "import ", "function ", "return ",
                     "self.", "this."].contains(where: t.contains)
         let otpHint = ["share", "deel deze", "niet delen", "expire", "verloopt", "geldig"].contains(where: lowerText.contains)
-        for line in t.split(whereSeparator: \.isNewline).prefix(4000) {
+        let allLines = t.split(whereSeparator: \.isNewline)
+        for (n, line) in allLines.prefix(4000).enumerated() where line.wholeMatch(of: bareLabel) != nil && n + 1 < allLines.count {
+            let value = allLines[n + 1].trimmingCharacters(in: .whitespaces)
+            if !value.contains(" "), value.count >= 6, value.contains(where: \.isLetter),
+               value.contains(where: { !$0.isLetter }), isCredential(Substring(value), .password, quoted: true, code: false) {
+                return true
+            }
+        }
+        for line in allLines.prefix(4000) {
             let lower = line.lowercased()
             guard labelWords.contains(where: lower.contains) else { continue }
             for i in starts(of: ["pass", "pw", "pin", "secret", "api", "access", "private", "auth", "refresh", "token", "session", "client", "wachtwoord"], in: line) {
@@ -225,11 +240,13 @@ enum Secrets {
                         || ["verificatie", "verification", "security", "beveiligings", "login", "inlog", "bevestigings", "sms",
                             "2fa", "otp", "toegangs", "access", "eenmalige", "one-time", "auth", "your", "je", "uw"].contains(where: before.hasSuffix)
                     if otp, value.wholeMatch(of: #/\d{4,8}/#) != nil { return true }
-                } else if value.count >= 6, value.contains(where: \.isLetter), value.contains(where: { !$0.isLetter }),
+                } else if value.count >= 6, value.contains(where: \.isLetter),
+                          value.contains(where: { $0.isNumber || (!$0.isLetter && !"-'.".contains($0)) }),
                           isCredential(m.2, .password, quoted: true, code: false) {
                     return true
                 }
             }
+            if let m = line.firstMatch(of: curlUser), isCredential(m.1, .password, quoted: false, code: false) { return true }
             for i in starts(of: ["bearer", "basic"], in: line) {
                 if let m = line[i...].prefixMatch(of: authHeader), m.1.contains(where: \.isNumber) { return true }
             }
@@ -297,7 +314,7 @@ enum Secrets {
         let lower = v.lowercased()
         guard v.count >= 4, !placeholders.contains(lower),
               !placeholders.contains(lower.trimmingCharacters(in: CharacterSet(charactersIn: "?![]"))),
-              let first = v.first, !"$<{%[(*•".contains(first),
+              let first = v.first, !"$<{%[(*•".contains(first), !v.hasPrefix("/"), !v.hasPrefix("~/"),
               !v.allSatisfy({ "*xX•.#-_".contains($0) }),
               !["your", "insert", "replace", "example", "<", "!ref", "!sub", "!getatt", "process.env", "os.environ", "os.getenv",
                 "getenv", "env.", "env[", "env(", "secrets.", "vars.", "config.", "settings.", "self.", "this.", "req.",
@@ -329,8 +346,14 @@ enum Secrets {
     private static func isSeedPhrase(_ s: String) -> Bool {
         let words = s.split(whereSeparator: \.isWhitespace)
         guard [12, 15, 18, 21, 24].contains(words.count) else { return false }
-        let common: Set<Substring> = ["the", "and", "you", "for", "are", "with", "your", "from", "have", "that",
-                                      "het", "een", "dat", "niet", "ook", "maar", "voor", "naar"]
+        // Recovery phrases (BIP39) avoid everyday function words; a normal sentence always has some.
+        let common: Set<Substring> = ["the", "and", "for", "are", "with", "your", "from", "have", "that", "this",
+                                      "these", "those", "was", "were", "would", "could", "should", "please", "our", "its",
+                                      "his", "her", "they", "them", "what", "when", "where", "which", "who", "how", "not",
+                                      "but", "into", "than", "there", "here", "thanks",
+                                      "het", "een", "dat", "die", "niet", "ook", "maar", "voor", "naar", "met", "wat",
+                                      "wie", "hoe", "waar", "als", "dan", "nog", "heb", "hebt", "heeft", "ben", "bent",
+                                      "zijn", "kan", "kun", "wil", "mijn", "jouw", "onze", "deze", "graag", "bedankt"]
         return words.allSatisfy { w in (3...8).contains(w.count) && w.allSatisfy { $0.isASCII && $0.isLowercase } && !common.contains(w) }
     }
 

@@ -82,7 +82,7 @@ You can drag the popup by any empty spot.
 - **Passwords and codes are recognized and never saved.** These stay in memory only, shown as `••••••••`, are not searchable, and disappear after 5 minutes:
   - 2FA codes, card numbers, and password-like text such as `Zomer2026!` or Apple's `xupjo4-gyzZyc-bavkif`
   - API keys and tokens (GitHub, GitLab, Anthropic, OpenAI, Stripe, Slack, AWS, Google and more), JWTs and private keys, also inside a longer text
-  - config lines like `export API_KEY=…` or `Password: …`, and links with a password in them (`postgres://user:pass@host`)
+  - config lines like `export API_KEY=…` or `Password: …`, and links with a password in them (`postgres://app:Hx7k2Lp9@db.example.com`)
   - screenshots whose text shows a key, token, labelled password or card number
 
   Pasting a secret back marks it as concealed and keeps it off Universal Clipboard, so other clipboard tools and devices skip it. You can turn recognition off in Settings.
@@ -112,8 +112,10 @@ Then remove Control+C from your Login Items.
 |---|---|
 | `Sources/main.swift` | Clipboard store, popup UI, global shortcut, app delegate |
 | `Sources/Settings.swift` | Preferences and the Settings window |
+| `Sources/Vault.swift` | Encryption with the Keychain key, and recognizing secrets |
 | `Sources/Demo.swift` | Sample data for screenshots (built only with `-D DEMO`) |
 | `Scripts/make-icon.swift` | Renders `Resources/AppIcon.icns` |
+| `Scripts/make-preview.swift` | Composes the overview image `docs/preview.nl.png` |
 | `Resources/*.lproj` | Translations (English is the source language) |
 | `Scripts/screenshot.sh` | Regenerates the images in `docs/` from sample data |
 | `build.sh` | Builds, signs, installs and launches the app |
