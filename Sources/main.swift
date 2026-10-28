@@ -443,6 +443,9 @@ struct PickerView: View {
     @ObservedObject var store: ClipStore
     @FocusState private var searchFocused: Bool
     @State private var hoveredID: UUID?
+    /// Whether the list has more above / below its visible part; drives the edge fades.
+    @State private var moreAbove = false
+    @State private var moreBelow = false
 
     static let cardRadius: CGFloat = 24
     /// Transparent margin around the glass so its shadow and edge highlights aren't clipped.
@@ -613,6 +616,16 @@ struct PickerView: View {
                 .padding(.vertical, 4)
             }
             .scrollIndicators(model.expanded ? .automatic : .never)
+            .onScrollGeometryChange(for: [Bool].self) { geo in
+                [geo.contentOffset.y > 2,
+                 geo.contentOffset.y + geo.containerSize.height < geo.contentSize.height - 2]
+            } action: { _, edges in
+                withAnimation(.easeOut(duration: 0.15)) {
+                    moreAbove = edges[0]
+                    moreBelow = edges[1]
+                }
+            }
+            .mask(edgeFade)
             .onChange(of: model.selection) {
                 guard items.indices.contains(model.selection) else { return }
                 proxy.scrollTo(items[model.selection].id)
@@ -620,6 +633,17 @@ struct PickerView: View {
             .onChange(of: model.focusToken) {
                 if let first = items.first { proxy.scrollTo(first.id, anchor: .top) }
             }
+        }
+    }
+
+    /// Soft fades at the list edges that only appear when there is more to scroll to.
+    private var edgeFade: some View {
+        VStack(spacing: 0) {
+            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                .frame(height: moreAbove ? 18 : 0)
+            Color.black
+            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                .frame(height: moreBelow ? 28 : 0)
         }
     }
 
@@ -1065,7 +1089,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let m = PickerView.margin * 2
         let top = PickerView.searchHeight + 8
         if model.expanded { return CGSize(width: 740 + m, height: top + 420 + m) }
-        let rows = CGFloat(min(max(store.items.count, 3), 10))
+        // Seven rows, plus half of the eighth when there is more: a visual hint that the list scrolls.
+        let count = store.items.count
+        let rows = CGFloat(min(max(count, 3), 7)) + (count > 7 ? 0.5 : 0)
         return CGSize(width: 360 + m, height: top + 36 + rows * 28 + 8 + m)
     }
 
