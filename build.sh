@@ -44,7 +44,9 @@ cp -R Resources/AppIcon.icns Resources/*.lproj "$APP/Contents/Resources/"
 # ad-hoc signing (-) would make macOS forget it every time.
 IDENTITY="Control+C Signing"
 security find-certificate -c "$IDENTITY" >/dev/null 2>&1 || IDENTITY="-"
-codesign --force --sign "$IDENTITY" --identifier com.svenvanrooijen.controlc "$APP"
+# Hardened runtime: blocks DYLD_INSERT_LIBRARIES and similar injection, so no other process can
+# borrow this app's Accessibility permission or its Keychain key. No exception entitlements.
+codesign --force --options runtime --sign "$IDENTITY" --identifier com.svenvanrooijen.controlc "$APP"
 
 pkill -x ControlC 2>/dev/null || true
 rm -rf /Applications/ControlC.app

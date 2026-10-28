@@ -4,7 +4,16 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+was_running=$(pgrep -x ControlC >/dev/null && echo 1 || echo 0)
 TMP=$(mktemp -d)
+# Clean up whatever happens, also if the build below fails: the folder holds full-screen captures.
+restore() {
+  rm -rf "$TMP"
+  [ "$was_running" = 1 ] && open /Applications/ControlC.app
+  return 0
+}
+trap restore EXIT INT TERM
+
 # A copy of the built app with the demo binary inside, so translations load as in the real app.
 cp -R build/ControlC.app "$TMP/"
 BIN="$TMP/ControlC.app/Contents/MacOS/ControlC"
@@ -12,13 +21,7 @@ swiftc -O -swift-version 5 -target "$(uname -m)-apple-macos26.0" -D DEMO Sources
 codesign --force --sign - "$TMP/ControlC.app" 2>/dev/null
 mkdir -p docs
 
-was_running=$(pgrep -x ControlC >/dev/null && echo 1 || echo 0)
 pkill -x ControlC 2>/dev/null || true
-restore() {
-  [ "$was_running" = 1 ] && open /Applications/ControlC.app
-  rm -rf "$TMP"
-}
-trap restore EXIT
 
 shoot() {
   rm -f "$TMP/crop"
@@ -29,6 +32,7 @@ shoot() {
   kill $pid
   read -r h w y x < "$TMP/crop" || true  # the file has no trailing newline
   sips -c "$h" "$w" --cropOffset "$y" "$x" "$TMP/full.png" --out "docs/$2" >/dev/null
+  rm -f "$TMP/full.png"
   echo "docs/$2"
 }
 

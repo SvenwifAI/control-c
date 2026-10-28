@@ -40,11 +40,15 @@ struct Shortcut: Codable, Equatable {
         self.keyLabel = keyLabel
     }
 
-    /// A shortcut from a key press, or nil when it lacks ⌘, ⌥ or ⌃ (a bare key would swallow normal typing).
+    /// A shortcut from a key press, or nil when it would break normal use of the Mac: a bare key,
+    /// ⌥ with a character key (that types ©, √ and the like), or a standard command such as ⌘V.
     init?(event: NSEvent) {
-        let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        guard !mods.intersection([.command, .option, .control]).isEmpty else { return nil }
-        let code = Int(event.keyCode)
+        self.init(keyCode: Int(event.keyCode),
+                  modifiers: event.modifierFlags.intersection([.command, .option, .control, .shift]),
+                  characters: event.charactersIgnoringModifiers ?? "")
+    }
+
+    init?(keyCode code: Int, modifiers mods: NSEvent.ModifierFlags, characters: String) {
         let named: [Int: String] = [
             kVK_Return: "↩", kVK_ANSI_KeypadEnter: "⌤", kVK_Space: "Space", kVK_Tab: "⇥",
             kVK_Delete: "⌫", kVK_ForwardDelete: "⌦", kVK_UpArrow: "↑", kVK_DownArrow: "↓",
@@ -54,9 +58,23 @@ struct Shortcut: Codable, Equatable {
             kVK_F11: "F11", kVK_F12: "F12",
         ]
         guard code != kVK_Escape else { return nil }
-        let label = named[code] ?? (event.charactersIgnoringModifiers ?? "").uppercased()
+        let typesCharacter = named[code] == nil || code == kVK_Space
+        let strong = !mods.intersection([.command, .control]).isEmpty
+        guard strong || (mods.contains(.option) && !typesCharacter) else { return nil }
+        let label = named[code] ?? characters.uppercased()
         guard !label.isEmpty else { return nil }
+        let reserved: [(NSEvent.ModifierFlags, Set<String>)] = [
+            ([.command], ["V", "C", "X", "Z", "A", "Q", "W", "H", "M", "S", "⇥", "Space"]),
+            ([.command, .shift], ["Z", "3", "4", "5"]),
+            ([.control], ["C", "D", "Z", "A", "E", "K"]),
+        ]
+        guard !reserved.contains(where: { $0.0 == mods && $0.1.contains(label) }) else { return nil }
         self.init(keyCode: code, modifiers: mods.rawValue, keyLabel: label)
+    }
+
+    /// The stored shortcut if it still passes the rules above (the defaults file can be edited by hand).
+    var validated: Shortcut {
+        Shortcut(keyCode: keyCode, modifiers: flags, characters: keyLabel == "Space" ? " " : keyLabel) != nil ? self : .standard
     }
 }
 
@@ -73,8 +91,26 @@ final class Settings: ObservableObject {
     @Published var maxItems: Int { didSet { defaults.set(maxItems, forKey: "maxItems"); onLimitsChange() } }
     @Published var retentionDays: Int { didSet { defaults.set(retentionDays, forKey: "retentionDays"); onLimitsChange() } }
     @Published var recognizeText: Bool { didSet { defaults.set(recognizeText, forKey: "recognizeText") } }
-    @Published var detectSecrets: Bool { didSet { defaults.set(detectSecrets, forKey: "detectSecrets") } }
-    @Published var excludedApps: [String] { didSet { defaults.set(excludedApps, forKey: "excludedApps") } }
+    @Published var detectSecrets: Bool {
+        didSet {
+            defaults.set(detectSecrets, forKey: "detectSecrets")
+            onDetectSecretsChange(detectSecrets)
+        }
+    }
+    @Published var excludedApps: [String] {
+        didSet {
+            defaults.set(excludedApps, forKey: "excludedApps")
+            onExcludedChange(excludedApps)
+        }
+    }
+    @Published var hideWhenSharing: Bool {
+        didSet {
+            defaults.set(hideWhenSharing, forKey: "hideWhenSharing")
+            onSharingChange(hideWhenSharing)
+        }
+    }
+    /// False when the history can't be encrypted (no Keychain access) and lives in memory only.
+    @Published var historyIsSaved = true
     /// True while the recorder listens, so the current global shortcut can be paused.
     @Published var isRecording = false { didSet { onRecordingChange(isRecording) } }
     @Published var shortcutTaken = false
@@ -82,13 +118,24 @@ final class Settings: ObservableObject {
     var onShortcutChange: () -> Void = {}
     var onLimitsChange: () -> Void = {}
     var onRecordingChange: (Bool) -> Void = { _ in }
+    var onExcludedChange: ([String]) -> Void = { _ in }
+    var onDetectSecretsChange: (Bool) -> Void = { _ in }
+    var onSharingChange: (Bool) -> Void = { _ in }
+
+    static let itemLimits = [20, 60, 100, 200]
+    static let retentionChoices = [1, 7, 30]
 
     var maxAge: TimeInterval { TimeInterval(retentionDays) * 24 * 3600 }
 
     private init() {
-        shortcut = (defaults.data(forKey: "shortcut")).flatMap { try? JSONDecoder().decode(Shortcut.self, from: $0) } ?? .standard
-        maxItems = defaults.object(forKey: "maxItems") as? Int ?? 60
-        retentionDays = defaults.object(forKey: "retentionDays") as? Int ?? 7
+        // Only values the Settings window can produce: the defaults file is editable by anyone.
+        shortcut = (defaults.data(forKey: "shortcut")).flatMap { try? JSONDecoder().decode(Shortcut.self, from: $0) }?
+            .validated ?? .standard
+        let items = defaults.object(forKey: "maxItems") as? Int ?? 60
+        maxItems = Self.itemLimits.contains(items) ? items : 60
+        let days = defaults.object(forKey: "retentionDays") as? Int ?? 7
+        retentionDays = Self.retentionChoices.contains(days) ? days : 7
+        hideWhenSharing = defaults.object(forKey: "hideWhenSharing") as? Bool ?? true
         recognizeText = defaults.object(forKey: "recognizeText") as? Bool ?? true
         detectSecrets = defaults.object(forKey: "detectSecrets") as? Bool ?? true
         excludedApps = defaults.stringArray(forKey: "excludedApps") ?? []
@@ -98,7 +145,9 @@ final class Settings: ObservableObject {
 // MARK: - Window
 
 final class SettingsWindowController {
+    static let windowID = NSUserInterfaceItemIdentifier("ControlC.settings")
     private var window: NSWindow?
+    private var observers: [NSObjectProtocol] = []
     let onClearHistory: () -> Void
 
     init(onClearHistory: @escaping () -> Void) { self.onClearHistory = onClearHistory }
@@ -111,8 +160,15 @@ final class SettingsWindowController {
             w.titlebarAppearsTransparent = true
             w.isReleasedWhenClosed = false
             w.contentView = NSHostingView(rootView: SettingsView(settings: .shared, onClearHistory: onClearHistory))
+            w.identifier = Self.windowID
             w.center()
             window = w
+            // A shortcut recorder left listening would turn the next key combination into the shortcut.
+            for name in [NSWindow.willCloseNotification, NSWindow.didResignKeyNotification] {
+                observers.append(NotificationCenter.default.addObserver(forName: name, object: w, queue: .main) { _ in
+                    Settings.shared.isRecording = false
+                })
+            }
         }
         // activate() is cooperative since macOS 14 and may be declined while another app is in use,
         // so bring the window forward regardless.
@@ -126,7 +182,6 @@ struct SettingsView: View {
     @ObservedObject var settings: Settings
     let onClearHistory: () -> Void
     @State private var loginEnabled = SMAppService.mainApp.status == .enabled
-    @State private var accessibilityGranted = AXIsProcessTrusted()
 
     var body: some View {
         Form {
@@ -140,13 +195,19 @@ struct SettingsView: View {
             } header: {
                 Text("Shortcut")
             } footer: {
-                Text("⌘↩ also sends messages in apps like Slack, Teams and Claude. If that clashes, try ⌥V or ⌘⇧V.")
+                Text("⌘↩ also sends messages in apps like Slack, Teams and Claude. If that clashes, try ⌘⇧V or ⌃⌥V.")
                     .foregroundStyle(.secondary)
             }
 
             Section("History") {
+                if !settings.historyIsSaved {
+                    Label("History isn’t saved: no access to the Keychain. It is kept in memory until you quit.",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .font(.callout)
+                }
                 Picker("Number of items", selection: $settings.maxItems) {
-                    ForEach([20, 60, 100, 200], id: \.self) { Text("\($0)").tag($0) }
+                    ForEach(Settings.itemLimits, id: \.self) { Text("\($0)").tag($0) }
                 }
                 Picker("Keep for", selection: $settings.retentionDays) {
                     Text("1 day").tag(1)
@@ -180,23 +241,17 @@ struct SettingsView: View {
             }
 
             Section("General") {
+                Toggle(isOn: $settings.hideWhenSharing) {
+                    Text("Hide during screen sharing")
+                    Text("The popup doesn’t show up in screen sharing, recordings or screenshots.")
+                }
                 Toggle("Start at login", isOn: $loginEnabled)
                     .onChange(of: loginEnabled) { setLogin(loginEnabled) }
-                LabeledContent("Automatic pasting") {
-                    if accessibilityGranted {
-                        Label("On", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                    } else {
-                        Button("Allow…") {
-                            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
-                        }
-                    }
-                }
             }
         }
         .formStyle(.grouped)
         .frame(width: 520, height: 600)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            accessibilityGranted = AXIsProcessTrusted()
             loginEnabled = SMAppService.mainApp.status == .enabled
         }
     }
@@ -266,6 +321,7 @@ struct ShortcutRecorder: View {
             }
         }
         .onDisappear(perform: stop)
+        .onChange(of: settings.isRecording) { if !settings.isRecording { removeMonitor() } }
     }
 
     private func toggleRecording() { settings.isRecording ? stop() : start() }
@@ -273,6 +329,7 @@ struct ShortcutRecorder: View {
     private func start() {
         settings.isRecording = true
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.window?.identifier == SettingsWindowController.windowID else { return event }
             if event.keyCode == UInt16(kVK_Escape) { stop(); return nil }
             if let s = Shortcut(event: event) {
                 settings.shortcut = s
@@ -285,8 +342,12 @@ struct ShortcutRecorder: View {
     }
 
     private func stop() {
+        removeMonitor()
+        settings.isRecording = false
+    }
+
+    private func removeMonitor() {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
-        settings.isRecording = false
     }
 }

@@ -76,11 +76,11 @@ text("Uitgeklapt  ·  Tab", size: 34, weight: .semibold, color: labelColor,
 
 // Features: 3 × 2 grid of Settings-style glyphs with a title and one line.
 let features: [(String, NSColor, String, String)] = [
-    ("bolt.fill", .systemBlue, "Direct bij je cursor", "Druk ⌘↩ en de popup staat meteen onder je tekstcursor."),
+    ("bolt.fill", .systemBlue, "Direct bij de hand", "Druk ⌘↩ en de popup staat meteen bij je muis."),
     ("text.viewfinder", .systemPurple, "Zoeken in screenshots", "Tekst in afbeeldingen wordt herkend, op je eigen Mac."),
     ("square.grid.2x2.fill", .systemOrange, "Kleur per type", "Tekst, links, bestanden, code en kleuren, met filters."),
-    ("lock.fill", .systemGreen, "Privé", "Versleuteld op je Mac. Wachtwoorden en codes worden nooit bewaard."),
-    ("keyboard.fill", .systemPink, "Alles met het toetsenbord", "↩ plakt, ⌘1–9 kiest direct, ⌘⌫ verwijdert, ⌘Z herstelt."),
+    ("lock.fill", .systemGreen, "Privé", "Versleuteld, zonder extra rechten. Wachtwoorden worden nooit bewaard."),
+    ("keyboard.fill", .systemPink, "Alles met het toetsenbord", "↩ kopieert, ⌘1–9 kiest direct, ⌘⌫ verwijdert, ⌘Z herstelt."),
     ("gearshape.fill", .systemGray, "Zoals jij het wilt", "Eigen sneltoets, bewaartermijn en uitgesloten apps."),
 ]
 let gridTop = top + shotH + 150, colW = (W - pad * 2) / 3, rowH: CGFloat = 200

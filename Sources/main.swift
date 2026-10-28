@@ -2,6 +2,7 @@
 
 import AppKit
 import SwiftUI
+import Combine
 import Carbon.HIToolbox
 import ServiceManagement
 import CryptoKit
@@ -31,7 +32,12 @@ struct ClipItem: Identifiable, Codable, Equatable {
     var rtf: Data?
     var html: Data?
     /// Set for recognized secrets: they live in memory until this moment and are never written to disk.
+    /// Not part of the stored format, so a planted history file can't create one.
     var sensitiveUntil: Date?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, text, imageFile, imageHash, date, appBundleID, appName, ocrText, filePaths, rtf, html
+    }
 
     var isImage: Bool { imageFile != nil }
     var isFile: Bool { filePaths?.isEmpty == false }
@@ -39,12 +45,10 @@ struct ClipItem: Identifiable, Codable, Equatable {
     var hasFormatting: Bool { rtf != nil || html != nil }
     var fileURLs: [URL] { (filePaths ?? []).map { URL(fileURLWithPath: $0) } }
 
-    /// The first file when it is an image of at most 20 MB, for thumbnails, preview and text recognition.
-    /// Bigger files get the Finder icon, so a huge TIFF can never stall the app.
+    /// The first file when its type is an image. Size and availability are checked off the main thread.
     var imageFileURL: URL? {
-        guard let url = fileURLs.first, UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true,
-              let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
-              size <= ClipStore.maxImageBytes else { return nil }
+        guard let url = fileURLs.first, UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true
+        else { return nil }
         return url
     }
 
@@ -59,11 +63,14 @@ struct ClipItem: Identifiable, Codable, Equatable {
         if isSensitive { return .secret }
         if isFile { return .file }
         guard let text else { return .image }
-        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if swatch != nil { return .color }
-        if !t.contains(where: \.isWhitespace) {
+        // Runs on every render, so the pattern checks only look at short texts.
+        if text.utf8.count <= 2048 {
+            let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if swatch != nil { return .color }
+            if !t.contains(where: \.isWhitespace) {
             if let scheme = URL(string: t)?.scheme?.lowercased(), scheme == "http" || scheme == "https" { return .link }
-            if t.wholeMatch(of: #/[^@\s]+@[^@\s]+\.[A-Za-z]{2,}/#) != nil { return .email }
+                if t.wholeMatch(of: #/[^@\s]+@[^@\s]+\.[A-Za-z]{2,}/#) != nil { return .email }
+            }
         }
         let head = text.prefix(4000)
         let markers = ["{", "}", ";", "=>", "func ", "def ", "const ", "import ", "</", "$ ", "()"]
@@ -72,8 +79,8 @@ struct ClipItem: Identifiable, Codable, Equatable {
 
     /// The color a copied hex value like "#FF6A00" describes.
     var swatch: Color? {
-        guard let t = text?.trimmingCharacters(in: .whitespacesAndNewlines),
-              let m = t.wholeMatch(of: #/\#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{3})/#) else { return nil }
+        guard let raw = text, raw.utf8.count <= 16, let m = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .wholeMatch(of: #/\#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{3})/#) else { return nil }
         var hex = String(m.1)
         if hex.count == 3 { hex = hex.map { "\($0)\($0)" }.joined() }
         guard let v = UInt32(hex, radix: 16) else { return nil }
@@ -82,7 +89,7 @@ struct ClipItem: Identifiable, Codable, Equatable {
     }
 
     var oneLine: String {
-        if isSensitive { return String(repeating: "•", count: min(max(text?.count ?? 8, 6), 14)) }
+        if isSensitive { return "••••••••" } // always 8: the length of a secret is information too
         if isFile {
             let names = fileURLs.map(\.lastPathComponent)
             return names.count == 1 ? names[0] : names[0] + " " + L("+ %d more", names.count - 1)
@@ -95,6 +102,9 @@ struct ClipItem: Identifiable, Codable, Equatable {
         let collapsed = text.prefix(300).split(whereSeparator: \.isWhitespace).joined(separator: " ")
         return collapsed.isEmpty ? L("(whitespace)") : collapsed
     }
+
+    /// True when the text spans several lines, which the one-line row would otherwise hide.
+    var isMultiline: Bool { text?.prefix(10_000).contains(where: \.isNewline) == true }
 }
 
 /// What a clip is, each with its own SF Symbol and system color.
@@ -157,22 +167,50 @@ enum ClipKind: CaseIterable {
 final class ClipStore: ObservableObject {
     static let maxTextBytes = 1_000_000
     static let maxImageBytes = 20_000_000
-    /// Per format; every save rewrites history.json, so formatting must stay small.
+    /// Images above this many pixels are skipped: decoding one would stall the app and use gigabytes.
+    static let maxImagePixels = 50_000_000
+    /// Per format; the whole history is rewritten on save, so formatting must stay small.
     static let maxRichBytes = 500_000
 
     @Published private(set) var items: [ClipItem] = []
+    /// False when the Keychain refused the key: the history then lives in memory only.
+    @Published private(set) var isPersistent = true
+    /// Bumped when a file thumbnail finishes loading, so rows redraw.
+    @Published private(set) var thumbnailVersion = 0
     let dir: URL
-    /// Nil when the Keychain refused: nothing is then written to disk at all.
     private var key: SymmetricKey?
     private var lastChange = -1
     private var timer: Timer?
+    private var expiryTimer: Timer?
     private let imageCache = NSCache<NSString, NSImage>()
+    private let thumbCache = NSCache<NSString, NSImage>()
+    private var thumbsLoading: Set<String> = []
+    private var fileSizes: [String: Int] = [:]
     private var iconCache: [String: NSImage] = [:]
+    /// Image bytes that must not (or cannot) be on disk: memory-only mode, and images showing a secret.
+    private var memoryImages: [String: Data] = [:]
+    /// Image encoding, encryption and disk writes, in order and off the main thread.
+    private let io = DispatchQueue(label: "ControlC.io", qos: .userInitiated)
+    private let ocrQueue = DispatchQueue(label: "ControlC.ocr", qos: .utility)
+    /// Apps that were frontmost since the previous poll, so a copy made just before switching apps
+    /// is still traced back to an excluded app.
+    private var recentApps: Set<String> = []
+    private var activationObserver: NSObjectProtocol?
+    private var saveScheduled = false
+    private var nextSecretSweep = Date()
 
+    private static let concealed = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
+    private static let sourceType = NSPasteboard.PasteboardType("org.nspasteboard.source")
+    /// Pasteboard markers for content that clipboard tools must not keep.
     private static let ignoredTypes: Set<String> = [
         "org.nspasteboard.ConcealedType",
         "org.nspasteboard.TransientType",
         "org.nspasteboard.AutoGeneratedType",
+        "de.petermaurer.TransientPasteboardType",
+        "com.typeit4me.clipping",
+        "Pasteboard generator type",
+        "com.agilebits.onepassword",
+        "net.antelle.keeweb",
     ]
 
     init() {
@@ -191,19 +229,29 @@ final class ClipStore: ObservableObject {
         var excluded = dir
         try? excluded.setResourceValues(values)
         key = Vault.loadKey()
+        isPersistent = key != nil
         load()
         expireOldItems()
     }
 
     private var historyURL: URL { dir.appendingPathComponent("history.enc") }
-    /// Plain JSON from versions before encryption; migrated and removed on first launch.
+    /// Plain JSON from versions before encryption; merged in and removed whenever found.
     private var legacyHistoryURL: URL { dir.appendingPathComponent("history.json") }
 
     func start() {
         #if DEMO
         return
         #endif
-        poll()
+        // Don't take what was already on the clipboard at launch: where it came from is unknown,
+        // so it could be from an excluded app.
+        lastChange = NSPasteboard.general.changeCount
+        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            if let id = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier {
+                self?.recentApps.insert(id)
+            }
+        }
         items.filter { $0.isImage && $0.ocrText == nil }.forEach(recognizeText(in:))
         let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.poll() }
         RunLoop.main.add(t, forMode: .common)
@@ -213,7 +261,253 @@ final class ClipStore: ObservableObject {
         }
     }
 
-    private var expiryTimer: Timer?
+    // MARK: Files
+
+    /// Only files this app wrote itself ("<24 hex chars>.enc", or ".png" from before encryption);
+    /// rejects anything else, such as a tampered history pointing at "../../somewhere".
+    private func fileURL(_ name: String?) -> URL? {
+        guard let name, name.count == 28, name.hasSuffix(".enc") || name.hasSuffix(".png"),
+              name.dropLast(4).allSatisfy({ $0.isASCII && $0.isHexDigit }) else { return nil }
+        return dir.appendingPathComponent(name)
+    }
+
+    /// Every file in the folder that belongs to this app.
+    private func isOwnFile(_ name: String) -> Bool {
+        fileURL(name) != nil || name == "history.enc" || name == "history.json"
+            || (name.hasPrefix("history-unreadable-") && name.hasSuffix(".enc"))
+    }
+
+    /// The decrypted bytes of a stored image.
+    private func imageData(_ name: String?) -> Data? {
+        guard let name else { return nil }
+        if let data = memoryImages[name] { return data }
+        guard let url = fileURL(name), let raw = try? Data(contentsOf: url) else { return nil }
+        if url.pathExtension == "png" { return raw }
+        guard let key else { return nil }
+        return Vault.open(raw, with: key, context: name)
+    }
+
+    @discardableResult
+    private static func writeFile(_ data: Data, to url: URL) -> Bool {
+        guard (try? data.write(to: url, options: .atomic)) != nil else { return false }
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        return true
+    }
+
+    private static func writeSealed(_ data: Data, to url: URL, key: SymmetricKey?) -> Bool {
+        guard let key, let sealed = Vault.seal(data, with: key, context: url.lastPathComponent) else { return false }
+        return writeFile(sealed, to: url)
+    }
+
+    // MARK: Text recognition
+
+    /// Reads the text in a copied image with Apple's on-device Vision, so screenshots become searchable.
+    /// An image that shows a credential is treated like a copied secret: memory only, masked, short-lived.
+    func recognizeText(in item: ClipItem) {
+        guard Settings.shared.recognizeText else { return }
+        let id = item.id
+        let stored = item.imageFile != nil ? imageData(item.imageFile) : nil
+        let fileURL = item.imageFileURL
+        guard stored != nil || fileURL != nil else { return }
+        ocrQueue.async {
+            let handler: VNImageRequestHandler
+            if let stored {
+                handler = VNImageRequestHandler(data: stored)
+            } else if let fileURL, Self.isSafeImageFile(fileURL) {
+                handler = VNImageRequestHandler(url: fileURL)
+            } else { return }
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            request.usesLanguageCorrection = true
+            request.recognitionLanguages = ["nl-NL", "en-US"]
+            try? handler.perform([request])
+            let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+            let secret = Secrets.containsCredential(text)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let i = self.items.firstIndex(where: { $0.id == id }) else { return }
+                self.items[i].ocrText = text
+                if secret, Settings.shared.detectSecrets { self.makeSensitive(at: i) }
+                self.save()
+            }
+        }
+    }
+
+    /// Local, downloaded, and at most 20 MB and 50 MP: anything else could hang or exhaust memory.
+    private static func isSafeImageFile(_ url: URL) -> Bool {
+        let keys: Set<URLResourceKey> = [.fileSizeKey, .volumeIsLocalKey, .isUbiquitousItemKey,
+                                         .ubiquitousItemDownloadingStatusKey]
+        guard let v = try? url.resourceValues(forKeys: keys), let size = v.fileSize, size <= maxImageBytes,
+              v.volumeIsLocal != false else { return false }
+        if v.isUbiquitousItem == true, v.ubiquitousItemDownloadingStatus != .current { return false }
+        return pixelCount(of: CGImageSourceCreateWithURL(url as CFURL, nil)).map { $0 <= maxImagePixels } ?? false
+    }
+
+    private static func pixelCount(of source: CGImageSource?) -> Int? {
+        guard let source, let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let w = props[kCGImagePropertyPixelWidth] as? Int, let h = props[kCGImagePropertyPixelHeight] as? Int
+        else { return nil }
+        return w * h
+    }
+
+    // MARK: Secrets
+
+    /// Moves an item out of the stored history: memory only, masked, gone after a few minutes.
+    private func makeSensitive(at i: Int) {
+        items[i].sensitiveUntil = Date().addingTimeInterval(Secrets.lifetime)
+        items[i].rtf = nil
+        items[i].html = nil
+        if let name = items[i].imageFile, let data = imageData(name) {
+            memoryImages[name] = data
+            if let url = fileURL(name), !items.contains(where: { $0.id != items[i].id && $0.imageFile == name }) {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+    }
+
+    /// Removes recognized secrets whose few minutes are up.
+    private func sweepSecrets() {
+        nextSecretSweep = Date().addingTimeInterval(5)
+        let now = Date()
+        let expired = items.filter { ($0.sensitiveUntil ?? .distantFuture) < now }
+        guard !expired.isEmpty else { return }
+        items.removeAll { ($0.sensitiveUntil ?? .distantFuture) < now }
+        expired.forEach(removeFile(of:))
+        if let deleted = lastDeleted?.item, deleted.isSensitive, (deleted.sensitiveUntil ?? now) < now {
+            lastDeleted = nil
+            removeFile(of: deleted)
+        }
+    }
+
+    /// Drops stored items that look like secrets, e.g. after turning recognition back on.
+    func purgeSecrets() {
+        let before = items.count
+        items.removeAll { !$0.isSensitive && ($0.text.map(Secrets.looksSecret) ?? false) }
+        if items.count != before { save() }
+    }
+
+    /// Drops everything that came from these apps, e.g. after excluding one.
+    func purge(apps: [String]) {
+        let removed = items.filter { $0.appBundleID.map(apps.contains) ?? false }
+        guard !removed.isEmpty else { return }
+        items.removeAll { $0.appBundleID.map(apps.contains) ?? false }
+        removed.forEach(removeFile(of:))
+        save()
+    }
+
+    // MARK: Capture
+
+    private func poll() {
+        if Date() >= nextSecretSweep { sweepSecrets() }
+        let pb = NSPasteboard.general
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        var involved = recentApps
+        if let id = frontmost?.bundleIdentifier { involved.insert(id) }
+        recentApps = frontmost?.bundleIdentifier.map { [$0] } ?? []
+
+        let change = pb.changeCount
+        guard change != lastChange else { return }
+        lastChange = change
+        guard let types = pb.types, !types.contains(where: { Self.ignoredTypes.contains($0.rawValue) }) else { return }
+
+        // The writer can name itself; otherwise the frontmost app (or one just before) is the source.
+        let source = pb.string(forType: Self.sourceType)
+        if let source { involved.insert(source) }
+        guard involved.isDisjoint(with: Settings.shared.excludedApps) else { return }
+        let app = source.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0).first } ?? frontmost
+        let appID = app?.bundleIdentifier ?? source, appName = app?.localizedName
+
+        // Read everything first, then check nothing changed or got marked concealed meanwhile.
+        let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]
+        let string = urls?.isEmpty == false ? nil : pb.string(forType: .string)
+        let rtf = string == nil ? nil : pb.data(forType: .rtf)
+        let html = string == nil ? nil : pb.data(forType: .html)
+        let imageData = (urls?.isEmpty == false || string != nil) ? nil
+            : (pb.data(forType: .png) ?? pb.data(forType: .tiff))
+        guard pb.changeCount == change,
+              !(pb.types ?? []).contains(where: { Self.ignoredTypes.contains($0.rawValue) }) else { return }
+
+        if let urls, !urls.isEmpty {
+            // Files first: Finder also puts their names on the pasteboard as plain text.
+            let paths = urls.map(\.path)
+            if let i = items.firstIndex(where: { $0.filePaths == paths }) { promote(at: i); return }
+            let item = ClipItem(appBundleID: appID, appName: appName, filePaths: paths)
+            insert(item)
+            recognizeText(in: item)
+        } else if let s = string, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            guard s.utf8.count <= Self.maxTextBytes else { return }
+            if Settings.shared.detectSecrets, Secrets.looksSecret(s) {
+                // Kept in memory for a few minutes, masked, never saved; formatting is dropped.
+                if let i = items.firstIndex(where: { $0.text == s }) {
+                    makeSensitive(at: i)
+                    promote(at: i)
+                    save() // drops it from disk if it was stored before
+                    return
+                }
+                var item = ClipItem(text: s, appBundleID: appID, appName: appName)
+                item.sensitiveUntil = Date().addingTimeInterval(Secrets.lifetime)
+                insert(item)
+                return
+            }
+            let rich = rtf.flatMap { $0.count <= Self.maxRichBytes ? $0 : nil }
+            let web = html.flatMap { $0.count <= Self.maxRichBytes ? $0 : nil }
+            if let i = items.firstIndex(where: { $0.text == s }) {
+                if rich != nil || web != nil { items[i].rtf = rich; items[i].html = web }
+                promote(at: i)
+                if i == 0 { save() }
+                return
+            }
+            insert(ClipItem(text: s, appBundleID: appID, appName: appName, rtf: rich, html: web))
+        } else if let raw = imageData {
+            captureImage(raw, appID: appID, appName: appName)
+        }
+    }
+
+    /// Checks size before decoding, converts to PNG and encrypts off the main thread, then adds the item.
+    private func captureImage(_ raw: Data, appID: String?, appName: String?) {
+        let key = self.key, dir = self.dir
+        io.async { [weak self] in
+            let source = CGImageSourceCreateWithData(raw as CFData, nil)
+            guard let source, let pixels = Self.pixelCount(of: source), pixels <= Self.maxImagePixels else { return }
+            var png = raw
+            if (CGImageSourceGetType(source) as String?) != UTType.png.identifier {
+                guard let cg = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return }
+                let out = NSMutableData()
+                guard let dest = CGImageDestinationCreateWithData(out, UTType.png.identifier as CFString, 1, nil) else { return }
+                CGImageDestinationAddImage(dest, cg, nil)
+                guard CGImageDestinationFinalize(dest) else { return }
+                png = out as Data
+            }
+            guard png.count <= Self.maxImageBytes else { return }
+            let hash = SHA256.hash(data: png).map { String(format: "%02x", $0) }.joined()
+            let name = "\(hash.prefix(24)).enc"
+            let written = key != nil && Self.writeSealed(png, to: dir.appendingPathComponent(name), key: key)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if !written { self.memoryImages[name] = png }
+                if let i = self.items.firstIndex(where: { $0.imageHash == hash }) { self.promote(at: i); return }
+                let item = ClipItem(imageFile: name, imageHash: hash, appBundleID: appID, appName: appName)
+                self.insert(item)
+                self.recognizeText(in: item)
+            }
+        }
+    }
+
+    // MARK: List changes
+
+    private func insert(_ item: ClipItem) {
+        items.insert(item, at: 0)
+        trimToLimit()
+        save()
+    }
+
+    /// Keeps at most `maxItems` stored items; short-lived secrets don't count and are never evicted for space.
+    private func trimToLimit() {
+        let limit = Settings.shared.maxItems
+        while items.lazy.filter({ !$0.isSensitive }).count > limit,
+              let i = items.lastIndex(where: { !$0.isSensitive }) {
+            removeFile(of: items.remove(at: i))
+        }
+    }
 
     /// Drops items not copied or used for `maxAge`, including their image files.
     func expireOldItems() {
@@ -225,138 +519,10 @@ final class ClipStore: ObservableObject {
         save()
     }
 
-    private let ocrQueue = DispatchQueue(label: "ControlC.ocr", qos: .utility)
-
-    /// Reads the text in a copied image with Apple's on-device Vision, so screenshots become searchable.
-    func recognizeText(in item: ClipItem) {
-        guard Settings.shared.recognizeText else { return }
-        let handler: VNImageRequestHandler
-        if item.imageFile != nil, let data = imageData(item.imageFile) {
-            handler = VNImageRequestHandler(data: data)
-        } else if let url = item.imageFileURL {
-            handler = VNImageRequestHandler(url: url)
-        } else { return }
-        let id = item.id
-        ocrQueue.async {
-            let request = VNRecognizeTextRequest()
-            request.recognitionLevel = .accurate
-            request.usesLanguageCorrection = true
-            request.recognitionLanguages = ["nl-NL", "en-US"]
-            try? handler.perform([request])
-            let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
-            DispatchQueue.main.async { [weak self] in
-                guard let self, let i = self.items.firstIndex(where: { $0.id == id }) else { return }
-                self.items[i].ocrText = text
-                self.save()
-            }
-        }
-    }
-
-    /// Only files this app wrote itself ("<24 hex chars>.enc", or ".png" from before encryption);
-    /// rejects anything else, such as a tampered history pointing at "../../somewhere".
-    private func fileURL(_ name: String?) -> URL? {
-        guard let name, name.count == 28, name.hasSuffix(".enc") || name.hasSuffix(".png"),
-              name.dropLast(4).allSatisfy({ $0.isHexDigit }) else { return nil }
-        return dir.appendingPathComponent(name)
-    }
-
-    /// The decrypted bytes of a stored image.
-    private func imageData(_ name: String?) -> Data? {
-        guard let url = fileURL(name), let raw = try? Data(contentsOf: url) else { return nil }
-        if url.pathExtension == "png" { return raw }
-        guard let key else { return nil }
-        return Vault.open(raw, with: key)
-    }
-
-    /// Writes encrypted with owner-only permissions; returns false (and writes nothing) without a key.
-    @discardableResult
-    private func writeSealed(_ data: Data, to url: URL) -> Bool {
-        guard let key, let sealed = Vault.seal(data, with: key),
-              (try? sealed.write(to: url, options: .atomic)) != nil else { return false }
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-        return true
-    }
-
-    private var nextSecretSweep = Date()
-
-    /// Removes recognized secrets whose few minutes are up.
-    private func sweepSecrets() {
-        nextSecretSweep = Date().addingTimeInterval(5)
-        let now = Date()
-        if items.contains(where: { ($0.sensitiveUntil ?? .distantFuture) < now }) {
-            items.removeAll { ($0.sensitiveUntil ?? .distantFuture) < now }
-        }
-    }
-
-    private func poll() {
-        if Date() >= nextSecretSweep { sweepSecrets() }
-        let pb = NSPasteboard.general
-        guard pb.changeCount != lastChange else { return }
-        lastChange = pb.changeCount
-
-        // Password managers mark secrets as concealed; never store those.
-        if let types = pb.types, types.contains(where: { Self.ignoredTypes.contains($0.rawValue) }) { return }
-
-        let app = NSWorkspace.shared.frontmostApplication
-        if let id = app?.bundleIdentifier, Settings.shared.excludedApps.contains(id) { return }
-        // Files first: Finder also puts their names on the pasteboard as plain text.
-        if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
-           !urls.isEmpty {
-            let paths = urls.map(\.path)
-            if let i = items.firstIndex(where: { $0.filePaths == paths }) { promote(at: i); return }
-            let item = ClipItem(appBundleID: app?.bundleIdentifier, appName: app?.localizedName, filePaths: paths)
-            insert(item)
-            recognizeText(in: item)
-        } else if let s = pb.string(forType: .string), !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            guard s.utf8.count <= Self.maxTextBytes else { return }
-            if Settings.shared.detectSecrets, Secrets.looksSecret(s) {
-                // Kept in memory for a few minutes, masked, never saved; formatting is dropped.
-                let until = Date().addingTimeInterval(Secrets.lifetime)
-                if let i = items.firstIndex(where: { $0.text == s }) {
-                    items[i].sensitiveUntil = until
-                    items[i].rtf = nil
-                    items[i].html = nil
-                    promote(at: i)
-                    save() // drops it from disk if it was stored before
-                    return
-                }
-                insert(ClipItem(text: s, appBundleID: app?.bundleIdentifier, appName: app?.localizedName,
-                                sensitiveUntil: until))
-                return
-            }
-            let rtf = pb.data(forType: .rtf).flatMap { $0.count <= Self.maxRichBytes ? $0 : nil }
-            let html = pb.data(forType: .html).flatMap { $0.count <= Self.maxRichBytes ? $0 : nil }
-            if let i = items.firstIndex(where: { $0.text == s }) {
-                if rtf != nil || html != nil { items[i].rtf = rtf; items[i].html = html }
-                promote(at: i)
-                if i == 0 { save() }
-                return
-            }
-            insert(ClipItem(text: s, appBundleID: app?.bundleIdentifier, appName: app?.localizedName, rtf: rtf, html: html))
-        } else if let img = NSImage(pasteboard: pb), let png = img.pngData, png.count <= Self.maxImageBytes {
-            let hash = SHA256.hash(data: png).map { String(format: "%02x", $0) }.joined()
-            if let i = items.firstIndex(where: { $0.imageHash == hash }) { promote(at: i); return }
-            let name = "\(hash.prefix(24)).enc"
-            guard let url = fileURL(name), writeSealed(png, to: url) else { return }
-            let item = ClipItem(imageFile: name, imageHash: hash, appBundleID: app?.bundleIdentifier, appName: app?.localizedName)
-            insert(item)
-            recognizeText(in: item)
-        }
-    }
-
-    private func insert(_ item: ClipItem) {
-        items.insert(item, at: 0)
-        while items.count > Settings.shared.maxItems { removeFile(of: items.removeLast()) }
-        save()
-    }
-
     /// Re-applies the item limit and retention after they change in Settings.
     func applyLimits() {
         expireOldItems()
-        guard items.count > Settings.shared.maxItems else { return }
-        let removed = items[Settings.shared.maxItems...]
-        items.removeLast(items.count - Settings.shared.maxItems)
-        removed.forEach(removeFile(of:))
+        trimToLimit()
         save()
     }
 
@@ -368,27 +534,44 @@ final class ClipStore: ObservableObject {
         save()
     }
 
-    /// Puts an item back on the system clipboard; `plain` drops its formatting.
+    /// Puts an item back on the system clipboard in one write; `plain` drops its formatting.
     func copyToPasteboard(_ item: ClipItem, promote shouldPromote: Bool = true, plain: Bool = false) {
         let pb = NSPasteboard.general
-        pb.clearContents()
+        if item.isSensitive {
+            // Concealed, in the same write as the text, and kept off Universal Clipboard.
+            pb.prepareForNewContents(with: .currentHostOnly)
+        } else {
+            pb.clearContents()
+        }
         if item.isFile {
             pb.writeObjects(item.fileURLs.filter { FileManager.default.fileExists(atPath: $0.path) } as [NSURL])
         } else if let t = item.text {
-            pb.setString(t, forType: .string)
-            if item.isSensitive {
-                pb.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
+            let entry = NSPasteboardItem()
+            entry.setString(t, forType: .string)
+            if item.isSensitive { entry.setData(Data(), forType: Self.concealed) }
+            if !plain, !item.isSensitive {
+                if let rtf = item.rtf { entry.setData(rtf, forType: .rtf) }
+                if let html = item.html { entry.setData(html, forType: .html) }
             }
-            if !plain {
-                if let rtf = item.rtf { pb.setData(rtf, forType: .rtf) }
-                if let html = item.html { pb.setData(html, forType: .html) }
-            }
-        } else if let img = image(for: item) {
-            pb.writeObjects([img])
+            pb.writeObjects([entry])
+        } else if let data = imageData(item.imageFile) {
+            let entry = NSPasteboardItem()
+            entry.setData(data, forType: .png)
+            if item.isSensitive { entry.setData(Data(), forType: Self.concealed) }
+            pb.writeObjects([entry])
         }
         lastChange = pb.changeCount
         if shouldPromote, let i = items.firstIndex(where: { $0.id == item.id }) { promote(at: i) }
     }
+
+    /// Puts plain text on the clipboard as if the user copied it, e.g. text recognized in an image.
+    func copyText(_ text: String) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+    }
+
+    // MARK: Delete
 
     /// The most recent deletion, kept (image file included) until it is undone or finalized.
     @Published private(set) var lastDeleted: (item: ClipItem, index: Int)?
@@ -414,13 +597,39 @@ final class ClipStore: ObservableObject {
         removeFile(of: item)
     }
 
+    /// Removes every file of the history, also ones the app can't read right now, and replaces the
+    /// key so copies of old files elsewhere (backups, snapshots) become unreadable.
     func clear() {
-        finalizeDelete()
-        let removed = items
+        lastDeleted = nil
         items.removeAll()
-        removed.forEach(removeFile(of:))
-        save()
+        memoryImages.removeAll()
+        imageCache.removeAllObjects()
+        saveScheduled = false
+        io.sync {} // let pending writes finish before deleting
+        let fm = FileManager.default
+        for url in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        where isOwnFile(url.lastPathComponent) {
+            try? fm.removeItem(at: url)
+        }
+        if key != nil {
+            key = Vault.rotateKey()
+            isPersistent = key != nil
+        }
+        saveNow()
     }
+
+    private func removeFile(of item: ClipItem) {
+        guard let f = item.imageFile, !items.contains(where: { $0.imageFile == f }),
+              lastDeleted?.item.imageFile != f else { return }
+        memoryImages[f] = nil
+        imageCache.removeObject(forKey: f as NSString)
+        thumbCache.removeObject(forKey: f as NSString)
+        if let url = fileURL(f) {
+            io.async { try? FileManager.default.removeItem(at: url) }
+        }
+    }
+
+    // MARK: Images and icons
 
     func image(for item: ClipItem) -> NSImage? {
         guard let f = item.imageFile else { return nil }
@@ -430,25 +639,55 @@ final class ClipStore: ObservableObject {
         return img
     }
 
-    private let fileThumbCache = NSCache<NSString, NSImage>()
+    /// A small thumbnail of a copied image, for rows.
+    func thumbnail(for item: ClipItem) -> NSImage? {
+        guard let f = item.imageFile else { return nil }
+        if let cached = thumbCache.object(forKey: f as NSString) { return cached }
+        guard let data = imageData(f), let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, Self.thumbOptions(96)) else { return nil }
+        let img = NSImage(cgImage: cg, size: .zero)
+        thumbCache.setObject(img, forKey: f as NSString)
+        return img
+    }
 
-    /// A small thumbnail for image files, else the Finder icon. Cached per path.
-    func fileThumbnail(for item: ClipItem) -> NSImage? {
+    private static func thumbOptions(_ size: Int) -> CFDictionary {
+        [kCGImageSourceCreateThumbnailFromImageAlways: true,
+         kCGImageSourceThumbnailMaxPixelSize: size,
+         kCGImageSourceCreateThumbnailWithTransform: true] as CFDictionary
+    }
+
+    /// A thumbnail for a copied file (or its Finder icon), made off the main thread: the file may be
+    /// big, on a network volume or still in iCloud. Returns nil until it is ready.
+    func fileThumbnail(for item: ClipItem, size: Int = 96) -> NSImage? {
         guard let url = item.fileURLs.first else { return nil }
-        if let cached = fileThumbCache.object(forKey: url.path as NSString) { return cached }
-        var thumb: NSImage?
-        if item.imageFileURL != nil, let src = CGImageSourceCreateWithURL(url as CFURL, nil),
-           let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, [
-               kCGImageSourceCreateThumbnailFromImageAlways: true,
-               kCGImageSourceThumbnailMaxPixelSize: 96,
-               kCGImageSourceCreateThumbnailWithTransform: true,
-           ] as CFDictionary) {
-            thumb = NSImage(cgImage: cg, size: .zero)
-        } else if FileManager.default.fileExists(atPath: url.path) {
-            thumb = NSWorkspace.shared.icon(forFile: url.path)
+        let cacheKey = "\(size)|\(url.path)" as NSString
+        if let cached = thumbCache.object(forKey: cacheKey) { return cached }
+        guard !thumbsLoading.contains(cacheKey as String) else { return nil }
+        thumbsLoading.insert(cacheKey as String)
+        let isImage = item.imageFileURL != nil
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var thumb: NSImage?
+            let byteSize = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
+            if isImage, Self.isSafeImageFile(url), let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+               let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, Self.thumbOptions(size)) {
+                thumb = NSImage(cgImage: cg, size: .zero)
+            } else if FileManager.default.fileExists(atPath: url.path) {
+                thumb = NSWorkspace.shared.icon(forFile: url.path)
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.thumbsLoading.remove(cacheKey as String)
+                if let byteSize { self.fileSizes[url.path] = byteSize }
+                if let thumb { self.thumbCache.setObject(thumb, forKey: cacheKey) }
+                self.thumbnailVersion += 1
+            }
         }
-        if let thumb { fileThumbCache.setObject(thumb, forKey: url.path as NSString) }
-        return thumb
+        return nil
+    }
+
+    /// The file's size once its thumbnail has loaded; nil until then or when it is gone.
+    func fileSize(for item: ClipItem) -> Int? {
+        item.fileURLs.first.flatMap { fileSizes[$0.path] }
     }
 
     func appIcon(for item: ClipItem) -> NSImage? {
@@ -460,54 +699,100 @@ final class ClipStore: ObservableObject {
         return icon
     }
 
-    private func removeFile(of item: ClipItem) {
-        guard let f = item.imageFile, let url = fileURL(f), !items.contains(where: { $0.imageFile == f }) else { return }
-        try? FileManager.default.removeItem(at: url)
-        imageCache.removeObject(forKey: f as NSString)
-    }
+    // MARK: Load and save
 
     private func load() {
         guard let key else { return }
-        if let sealed = try? Data(contentsOf: historyURL), let data = Vault.open(sealed, with: key),
-           let decoded = try? JSONDecoder().decode([ClipItem].self, from: data) {
-            items = decoded
-        } else if let data = try? Data(contentsOf: legacyHistoryURL),
-                  let decoded = try? JSONDecoder().decode([ClipItem].self, from: data) {
-            migrate(decoded)
-        }
-    }
-
-    /// One-time upgrade from the plain-text history: drops anything that looks like a secret,
-    /// encrypts the rest and the stored images, then deletes the plain files.
-    private func migrate(_ old: [ClipItem]) {
-        var kept: [ClipItem] = []
-        for var item in old {
-            if let t = item.text, Secrets.looksSecret(t) { continue }
-            if let name = item.imageFile, name.hasSuffix(".png"), let url = fileURL(name) {
-                let encName = String(name.dropLast(4)) + ".enc"
-                guard let png = try? Data(contentsOf: url), let encURL = fileURL(encName),
-                      writeSealed(png, to: encURL) else { continue }
-                item.imageFile = encName
+        let fm = FileManager.default
+        if fm.fileExists(atPath: historyURL.path) {
+            guard let sealed = try? Data(contentsOf: historyURL),
+                  let data = Vault.open(sealed, with: key, context: historyURL.lastPathComponent),
+                  let decoded = try? JSONDecoder().decode([ClipItem].self, from: data) else {
+                // Wrong key or damaged file: set it aside instead of overwriting it, and start empty.
+                // No cleanup either, since its images may still belong to it.
+                let aside = dir.appendingPathComponent("history-unreadable-\(Int(Date().timeIntervalSince1970)).enc")
+                try? fm.moveItem(at: historyURL, to: aside)
+                NSLog("Control+C: history could not be read and was set aside")
+                return
             }
-            kept.append(item)
+            items = decoded
         }
-        items = kept
-        save()
-        guard FileManager.default.fileExists(atPath: historyURL.path) else { return }
-        try? FileManager.default.removeItem(at: legacyHistoryURL)
-        let leftovers = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
-        for url in leftovers where url.pathExtension == "png" && fileURL(url.lastPathComponent) != nil {
-            try? FileManager.default.removeItem(at: url)
+        if fm.fileExists(atPath: legacyHistoryURL.path) { mergeLegacyHistory() }
+        upgradeStoredImages()
+        guard saveNow() else { return } // keep every old file until the new history is safely written
+        if fm.fileExists(atPath: legacyHistoryURL.path) { try? fm.removeItem(at: legacyHistoryURL) }
+        removeOrphanedFiles()
+    }
+
+    /// Takes over a plain-text history from before encryption, leaving out anything that looks secret.
+    private func mergeLegacyHistory() {
+        guard let data = try? Data(contentsOf: legacyHistoryURL),
+              let old = try? JSONDecoder().decode([ClipItem].self, from: data) else { return }
+        let known = Set(items.map(\.id))
+        let added = old.filter { item in
+            !known.contains(item.id) && !(item.text.map(Secrets.looksSecret) ?? false)
+        }
+        items = (items + added).sorted { $0.date > $1.date }
+        trimToLimit()
+    }
+
+    /// Re-encrypts images still stored as plain PNG or in the first encrypted format.
+    private func upgradeStoredImages() {
+        guard let key else { return }
+        for i in items.indices {
+            guard let name = items[i].imageFile, let url = fileURL(name),
+                  let raw = try? Data(contentsOf: url) else { continue }
+            if url.pathExtension == "png" {
+                let encName = String(name.dropLast(4)) + ".enc"
+                if Self.writeSealed(raw, to: dir.appendingPathComponent(encName), key: key) {
+                    items[i].imageFile = encName // the .png goes once the history is saved
+                }
+            } else if !Vault.isCurrentFormat(raw), let plain = Vault.open(raw, with: key, context: name) {
+                _ = Self.writeSealed(plain, to: url, key: key)
+            }
         }
     }
 
-    /// Encrypts and writes the history. Recognized secrets are always left out.
+    /// Deletes image files no item refers to: leftovers of a crash, a quit right after deleting, or a
+    /// plain PNG that was just re-encrypted.
+    private func removeOrphanedFiles() {
+        let used = Set(items.compactMap(\.imageFile))
+        let fm = FileManager.default
+        for url in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        where fileURL(url.lastPathComponent) != nil && !used.contains(url.lastPathComponent) {
+            try? fm.removeItem(at: url)
+        }
+    }
+
+    /// Saves shortly after the last change, encrypted and off the main thread. Secrets are never included.
     private func save() {
         #if DEMO
         return
         #endif
-        guard let data = try? JSONEncoder().encode(items.filter { !$0.isSensitive }) else { return }
-        writeSealed(data, to: historyURL)
+        guard !saveScheduled else { return }
+        saveScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, self.saveScheduled else { return }
+            self.saveScheduled = false
+            let snapshot = self.items.filter { !$0.isSensitive }, key = self.key, url = self.historyURL
+            self.io.async { _ = Self.writeHistory(snapshot, key: key, to: url) }
+        }
+    }
+
+    /// Saves right away and waits for it, e.g. before quitting or before deleting old files.
+    @discardableResult
+    func saveNow() -> Bool {
+        #if DEMO
+        return true
+        #endif
+        saveScheduled = false
+        let snapshot = items.filter { !$0.isSensitive }, key = self.key, url = historyURL
+        return io.sync { Self.writeHistory(snapshot, key: key, to: url) }
+    }
+
+    private static func writeHistory(_ items: [ClipItem], key: SymmetricKey?, to url: URL) -> Bool {
+        guard let data = try? JSONEncoder().encode(items) else { return false }
+        return writeSealed(data, to: url, key: key)
     }
 }
 
@@ -522,7 +807,10 @@ extension NSImage {
 
 final class PickerModel: ObservableObject {
     @Published var query = "" { didSet { selection = 0 } }
-    @Published var selection = 0
+    /// Row of the highlighted item; follows that item when the list changes underneath it.
+    @Published var selection = 0 { didSet { selectedID = selected?.id } }
+    private var selectedID: UUID?
+    private var itemsObserver: AnyCancellable?
     @Published var focusToken = 0
     @Published var copiedID: UUID?
     @Published var expanded = UserDefaults.standard.bool(forKey: "expanded") {
@@ -532,12 +820,24 @@ final class PickerModel: ObservableObject {
         }
     }
     let store: ClipStore
+    /// Puts the item on the clipboard and closes the popup; `plain` drops formatting.
     var onChoose: (ClipItem, Bool) -> Void = { _, _ in }
     var onResize: () -> Void = {}
     var onOpenSettings: () -> Void = {}
-    var onPastePlain: (ClipItem) -> Void = { _ in }
 
-    init(store: ClipStore) { self.store = store }
+    init(store: ClipStore) {
+        self.store = store
+        // A new copy or an expiring secret above the highlight must not shift what ↩ copies.
+        itemsObserver = store.$items.receive(on: RunLoop.main).sink { [weak self] _ in self?.reanchor() }
+    }
+
+    private func reanchor() {
+        guard let id = selectedID, let i = filtered.firstIndex(where: { $0.id == id }) else {
+            clampSelection()
+            return
+        }
+        if i != selection { selection = i }
+    }
 
     @Published var kindFilter: ClipKind? { didSet { selection = 0 } }
 
@@ -775,9 +1075,9 @@ struct PickerView: View {
                                 hovered: hovered, store: store)
                             .id(item.id)
                             .contentShape(Rectangle())
-                            // Double click pastes into the focused app; a single click only copies.
+                            // Double click copies and closes; a single click copies and keeps the popup open.
                             // Not promoted on copy, so the row stays put under the second click.
-                            .onTapGesture(count: 2) { model.onChoose(item, true) }
+                            .onTapGesture(count: 2) { model.onChoose(item, false) }
                             .simultaneousGesture(TapGesture().onEnded { copy(item, at: idx) })
                             // Outside the tap gestures above, so clicking × never also copies.
                             .overlay(alignment: .trailing) {
@@ -789,19 +1089,15 @@ struct PickerView: View {
                                 if inside { hoveredID = item.id } else if hoveredID == item.id { hoveredID = nil }
                             }
                             .contextMenu {
-                                Button("Paste") { model.onChoose(item, true) }
                                 if item.hasFormatting {
-                                    Button("Paste Without Formatting") { model.onPastePlain(item) }
+                                    Button("Copy Without Formatting") { model.onChoose(item, true) }
                                 }
                                 Button("Copy") { copy(item, at: idx) }
                                 if item.isFile {
                                     Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting(item.fileURLs) }
                                 }
-                                if let ocr = item.ocrText, !ocr.isEmpty {
-                                    Button("Copy Text from Image") {
-                                        NSPasteboard.general.clearContents()
-                                        NSPasteboard.general.setString(ocr, forType: .string)
-                                    }
+                                if !item.isSensitive, let ocr = item.ocrText, !ocr.isEmpty {
+                                    Button("Copy Text from Image") { store.copyText(ocr) }
                                 }
                                 Divider()
                                 Button("Delete") { model.delete(item) }
@@ -909,8 +1205,8 @@ struct PickerView: View {
             Text(L("%d items", store.items.count))
                 .foregroundStyle(.tertiary)
             Spacer()
-            KeyHint(keys: "↩", label: L("Paste"))
-            KeyHint(keys: "⇧↩", label: L("Copy only"))
+            KeyHint(keys: "↩", label: L("Copy"))
+            KeyHint(keys: "⌥↩", label: L("Without formatting"))
             KeyHint(keys: "⌘⌫", label: L("Delete"))
             KeyHint(keys: "esc", label: L("Close"))
         }
@@ -990,6 +1286,12 @@ struct ClipRow: View {
                 }
             }
             Spacer(minLength: 4)
+            if item.isMultiline && !item.isSensitive && !copied && !hovered {
+                Image(systemName: "text.append")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(selected ? Color.white.opacity(0.75) : Color.secondary)
+                    .help(L("Several lines"))
+            }
             if copied {
                 Label("Copied", systemImage: "checkmark")
                     .font(.system(size: 11, weight: .medium))
@@ -1026,13 +1328,15 @@ struct ClipRow: View {
     }
 
     @ViewBuilder private var baseThumbnail: some View {
-        if item.isFile, let thumb = store.fileThumbnail(for: item) {
+        if item.isSensitive {
+            KindIcon(kind: .secret, size: iconSize, selected: selected) // never a thumbnail of a secret
+        } else if item.isFile, let thumb = store.fileThumbnail(for: item) {
             Image(nsImage: thumb)
                 .resizable()
                 .scaledToFill()
                 .frame(width: iconSize, height: iconSize)
                 .clipShape(RoundedRectangle(cornerRadius: compact ? 4 : 6, style: .continuous))
-        } else if let img = store.image(for: item) {
+        } else if let img = store.thumbnail(for: item) {
             Image(nsImage: img)
                 .resizable()
                 .scaledToFill()
@@ -1100,15 +1404,13 @@ struct PreviewPane: View {
                         let urls = item.fileURLs
                         if urls.count > 1 { meta(L("Content"), L("%d files", urls.count)) }
                         meta(L("Location"), (urls[0].deletingLastPathComponent().path as NSString).abbreviatingWithTildeInPath)
-                        if let size = (try? urls[0].resourceValues(forKeys: [.fileSizeKey]))?.fileSize {
+                        if let size = store.fileSize(for: item) {
                             meta(L("Size"), ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))
-                        } else if !FileManager.default.fileExists(atPath: urls[0].path) {
-                            meta(L("Status"), L("File no longer exists"))
                         }
                     } else if item.isSensitive, let until = item.sensitiveUntil {
                         meta(L("Stored"), L("Not on disk · gone at %@", until.formatted(date: .omitted, time: .shortened)))
                     } else if let t = item.text {
-                        if item.hasFormatting { meta(L("Formatting"), L("Kept · ⌥↩ pastes without")) }
+                        if item.hasFormatting { meta(L("Formatting"), L("Kept · ⌥↩ copies without")) }
                         let lines = t.split(separator: "\n", omittingEmptySubsequences: false).count
                         meta(L("Content"), lines == 1 ? L("%d characters · 1 line", t.count) : L("%d characters · %d lines", t.count, lines))
                     } else if let img = store.image(for: item) {
@@ -1141,7 +1443,7 @@ struct PreviewPane: View {
             .padding(20)
         } else if let item, item.isFile {
             VStack(spacing: 10) {
-                if let url = item.imageFileURL, let img = NSImage(contentsOf: url) {
+                if item.imageFileURL != nil, let img = store.fileThumbnail(for: item, size: 1200) {
                     Image(nsImage: img)
                         .resizable()
                         .scaledToFit()
@@ -1181,6 +1483,8 @@ struct PreviewPane: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(18)
             }
+            // Links in copied text are shown, not followed: their target can differ from their label.
+            .environment(\.openURL, OpenURLAction { _ in .discarded })
         } else if let item, let text = item.text {
             ScrollView {
                 Text(String(text.prefix(8000)))
@@ -1196,11 +1500,18 @@ struct PreviewPane: View {
         }
     }
 
-    /// The RTF rendered as it will paste; skipped for very large documents to keep the preview instant.
+    private final class Rendered { let value: AttributedString?; init(_ v: AttributedString?) { value = v } }
+    private static let renderedCache = NSCache<NSString, Rendered>()
+
+    /// The RTF rendered as it will paste, parsed once per item; skipped for very large documents.
     private static func formatted(_ item: ClipItem) -> AttributedString? {
-        guard let rtf = item.rtf, rtf.count < 200_000,
-              let ns = NSAttributedString(rtf: rtf, documentAttributes: nil) else { return nil }
-        return try? AttributedString(ns, including: \.appKit)
+        guard let rtf = item.rtf, rtf.count < 200_000 else { return nil }
+        let key = item.id.uuidString as NSString
+        if let cached = renderedCache.object(forKey: key) { return cached.value }
+        let value = NSAttributedString(rtf: rtf, documentAttributes: nil)
+            .flatMap { try? AttributedString($0, including: \.appKit) }
+        renderedCache.setObject(Rendered(value), forKey: key)
+        return value
     }
 
     private func meta(_ key: String, _ value: String) -> some View {
@@ -1234,7 +1545,9 @@ final class ClipPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 
     override func sendEvent(_ event: NSEvent) {
-        if event.type == .keyDown, keyHandler?(event) == true { return }
+        // While an input method is composing (Japanese, Chinese, dead keys), keys belong to it.
+        let composing = (firstResponder as? NSTextView)?.hasMarkedText() == true
+        if event.type == .keyDown, !composing, keyHandler?(event) == true { return }
         super.sendEvent(event)
     }
 }
@@ -1271,7 +1584,7 @@ final class HotKey {
 // MARK: - App
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate {
-    let store = ClipStore()
+    lazy var store = ClipStore() // created after the single-instance check
     lazy var model = PickerModel(store: store)
     let settings = Settings.shared
     lazy var settingsWindow = SettingsWindowController { [weak self] in self?.clearHistory() }
@@ -1280,19 +1593,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     var hotKey: HotKey?
     var statusItem: NSStatusItem!
     let loginItem = NSMenuItem(title: L("Start at Login"), action: #selector(toggleLogin), keyEquivalent: "")
-    let pasteItem = NSMenuItem(title: L("Enable Automatic Pasting…"), action: #selector(requestAccessibility), keyEquivalent: "")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if !DEMO
+        // Two copies would overwrite each other's history and delete each other's images.
+        let me = NSRunningApplication.current
+        if NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+            .contains(where: { $0 != me }) {
+            NSApp.terminate(nil)
+            return
+        }
+        #endif
         store.start()
 
         panel = ClipPanel(size: CGSize(width: 340, height: 300))
         panel.delegate = self
         panel.contentView = NSHostingView(rootView: PickerView(model: model, store: store))
         panel.keyHandler = { [weak self] in self?.handleKey($0) ?? false }
-        model.onChoose = { [weak self] item, paste in self?.choose(item, paste: paste) }
+        #if !DEMO
+        panel.sharingType = settings.hideWhenSharing ? .none : .readOnly
+        #endif
+        model.onChoose = { [weak self] item, plain in self?.choose(item, plain: plain) }
         model.onResize = { [weak self] in self?.layoutPanel() }
         model.onOpenSettings = { [weak self] in self?.openSettings() }
-        model.onPastePlain = { [weak self] item in self?.choose(item, paste: true, plain: true) }
 
         hotKey = HotKey { [weak self] in self?.toggle() }
         registerShortcut()
@@ -1303,16 +1626,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             if recording { self?.hotKey?.unregister() } else { self?.registerShortcut() }
         }
         settings.onLimitsChange = { [weak self] in self?.store.applyLimits() }
+        settings.onExcludedChange = { [weak self] apps in self?.store.purge(apps: apps) }
+        settings.onDetectSecretsChange = { [weak self] on in if on { self?.store.purgeSecrets() } }
+        settings.onSharingChange = { [weak self] hide in self?.panel.sharingType = hide ? .none : .readOnly }
+        settings.historyIsSaved = store.isPersistent
+        storageObserver = store.$isPersistent.sink { [weak self] saved in self?.settings.historyIsSaved = saved }
         setupStatusItem()
 
         #if DEMO
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.showDemo() }
         #endif
+    }
 
-        if !AXIsProcessTrusted(), !UserDefaults.standard.bool(forKey: "askedAccessibility") {
-            UserDefaults.standard.set(true, forKey: "askedAccessibility")
-            requestAccessibility()
-        }
+    private var storageObserver: AnyCancellable?
+
+    func applicationWillTerminate(_ notification: Notification) {
+        store.finalizeDelete()
+        store.saveNow()
     }
 
     func registerShortcut() {
@@ -1332,14 +1662,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         model.query = ""
         model.kindFilter = nil
         model.selection = 0
-        anchor = Self.textCaretRect() ?? NSRect(origin: NSEvent.mouseLocation, size: .zero)
+        anchor = NSRect(origin: NSEvent.mouseLocation, size: .zero)
         userMoved = false
         layoutPanel()
         panel.makeKeyAndOrderFront(nil)
         model.focusToken += 1
     }
 
-    /// What the panel hangs off: the text caret, or the mouse pointer. Cocoa screen coordinates.
+    /// What the panel hangs off: the mouse pointer, in Cocoa screen coordinates.
     private var anchor = NSRect.zero
     /// Set once the user drags the panel; resizing then keeps its top-left corner where they put it.
     private var userMoved = false
@@ -1378,31 +1708,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         isLayingOut = false
     }
 
-    /// Bounds of the insertion point in the focused text field of the frontmost app, via Accessibility.
-    static func textCaretRect() -> NSRect? {
-        guard AXIsProcessTrusted() else { return nil }
-        let system = AXUIElementCreateSystemWide()
-        AXUIElementSetMessagingTimeout(system, 0.05) // never let a slow app delay the popup
-        var focused: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
-              let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else { return nil }
-        let element = focused as! AXUIElement
-        AXUIElementSetMessagingTimeout(element, 0.05)
-        var range: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &range) == .success,
-              let range else { return nil }
-        var boundsValue: CFTypeRef?
-        guard AXUIElementCopyParameterizedAttributeValue(element, kAXBoundsForRangeParameterizedAttribute as CFString,
-                                                         range, &boundsValue) == .success,
-              let boundsValue, CFGetTypeID(boundsValue) == AXValueGetTypeID() else { return nil }
-        var rect = CGRect.zero
-        guard AXValueGetValue(boundsValue as! AXValue, .cgRect, &rect),
-              rect.origin != .zero, rect.height > 0, rect.height < 200 else { return nil }
-        // AX uses top-left origin on the primary screen; Cocoa uses bottom-left.
-        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-        return NSRect(x: rect.minX, y: primaryHeight - rect.maxY, width: rect.width, height: rect.height)
-    }
-
     func hide() {
         panel.orderOut(nil)
         model.confirmingClear = false
@@ -1432,33 +1737,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             model.expanded.toggle()
         case kVK_Return, kVK_ANSI_KeypadEnter:
             if let item = model.selected {
-                choose(item, paste: !e.modifierFlags.contains(.shift), plain: e.modifierFlags.contains(.option))
+                choose(item, plain: e.modifierFlags.contains(.option))
             }
         case kVK_Delete where cmd && e.modifierFlags.contains(.shift):
             if !store.items.isEmpty { model.confirmingClear = true }
         case kVK_Delete where cmd:
             if let item = model.selected { model.delete(item) }
         default:
-            guard cmd, let n = Int(e.charactersIgnoringModifiers ?? ""), (1...9).contains(n) else { return false }
+            // By key position, so ⌘1–⌘9 also work on AZERTY and other layouts.
+            let digitKeys = [kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4, kVK_ANSI_5,
+                             kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8, kVK_ANSI_9]
+            guard cmd, let n = digitKeys.firstIndex(of: Int(e.keyCode)) else { return false }
             let items = model.filtered
-            if items.count >= n { choose(items[n - 1], paste: true) }
+            if items.count > n { choose(items[n]) }
         }
         return true
     }
 
-    func choose(_ item: ClipItem, paste: Bool, plain: Bool = false) {
-        store.copyToPasteboard(item, plain: plain)
+    /// Puts the item on the clipboard and closes; you paste it yourself with ⌘V. No Accessibility
+    /// permission is needed, so the app can't type into or read other apps.
+    func choose(_ item: ClipItem, plain: Bool = false) {
         hide()
-        // The panel never activates this app, so the previous app is still frontmost and receives ⌘V.
-        guard paste, AXIsProcessTrusted() else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            let src = CGEventSource(stateID: .combinedSessionState)
-            for down in [true, false] {
-                let e = CGEvent(keyboardEventSource: src, virtualKey: CGKeyCode(kVK_ANSI_V), keyDown: down)
-                e?.flags = .maskCommand
-                e?.post(tap: .cghidEventTap)
-            }
-        }
+        store.copyToPasteboard(item, plain: plain)
     }
 
     // MARK: Menu bar
@@ -1473,7 +1773,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         menu.addItem(withTitle: L("Settings…"), action: #selector(openSettings), keyEquivalent: ",")
         menu.addItem(.separator())
         menu.addItem(loginItem)
-        menu.addItem(pasteItem)
         menu.addItem(withTitle: L("Clear History…"), action: #selector(clearHistory), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: L("Quit Control+C"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -1484,7 +1783,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     func menuNeedsUpdate(_ menu: NSMenu) {
         openItem.title = L("Open Clipboard") + "   \(settings.shortcut.display)"
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        pasteItem.isHidden = AXIsProcessTrusted()
     }
 
     @objc func openFromMenu() { DispatchQueue.main.async { self.show() } }
@@ -1508,10 +1806,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
     }
 
-    @objc func requestAccessibility() {
-        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-        _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
-    }
 }
 
 let app = NSApplication.shared

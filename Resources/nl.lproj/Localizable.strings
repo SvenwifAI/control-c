@@ -21,7 +21,6 @@
 "%d hr ago" = "%d uur geleden";
 "yesterday" = "gisteren";
 "%d days ago" = "%d dagen geleden";
-"Paste" = "Plakken";
 "Copy" = "Kopiëren";
 "Copy Text from Image" = "Kopieer tekst uit afbeelding";
 "Delete" = "Verwijderen";
@@ -36,7 +35,6 @@
 "Nothing copied yet" = "Nog niks gekopieerd";
 "No results" = "Geen resultaten";
 "%d items" = "%d items";
-"Copy only" = "Alleen kopiëren";
 "Close" = "Sluit";
 "Source" = "Bron";
 "Unknown" = "Onbekend";
@@ -47,7 +45,6 @@
 "%d words recognized · right-click to copy" = "%d woorden herkend · rechtsklik om te kopiëren";
 "Open Clipboard" = "Open klembord";
 "Start at Login" = "Start bij inloggen";
-"Enable Automatic Pasting…" = "Automatisch plakken inschakelen…";
 "Settings…" = "Instellingen…";
 "Clear History…" = "Geschiedenis wissen…";
 "Quit Control+C" = "Stop Control+C";
@@ -57,7 +54,7 @@
 "Open clipboard" = "Klembord openen";
 "Another app already uses this shortcut." = "Deze sneltoets wordt al door een andere app gebruikt.";
 "Shortcut" = "Sneltoets";
-"⌘↩ also sends messages in apps like Slack, Teams and Claude. If that clashes, try ⌥V or ⌘⇧V." = "⌘↩ verstuurt ook berichten in apps als Slack, Teams en Claude. Kies bijvoorbeeld ⌥V of ⌘⇧V als dat botst.";
+"⌘↩ also sends messages in apps like Slack, Teams and Claude. If that clashes, try ⌘⇧V or ⌃⌥V." = "⌘↩ verstuurt ook berichten in apps als Slack, Teams en Claude. Kies bijvoorbeeld ⌘⇧V of ⌃⌥V als dat botst.";
 "History" = "Geschiedenis";
 "Number of items" = "Aantal items";
 "Keep for" = "Bewaren";
@@ -72,9 +69,6 @@
 "Nothing you copy in these apps is ever stored. Useful for banking or a password file." = "Wat je in deze apps kopieert, wordt nooit bewaard. Handig voor bankieren of een wachtwoordbestand.";
 "General" = "Algemeen";
 "Start at login" = "Start bij inloggen";
-"Automatic pasting" = "Automatisch plakken";
-"On" = "Aan";
-"Allow…" = "Toestaan…";
 "Exclude" = "Uitsluiten";
 "Stop excluding" = "Niet meer uitsluiten";
 "Press keys…" = "Druk op toetsen…";
@@ -88,8 +82,6 @@
 "Status" = "Status";
 "File no longer exists" = "Bestand bestaat niet meer";
 "Formatting" = "Opmaak";
-"Kept · ⌥↩ pastes without" = "Behouden · ⌥↩ plakt zonder";
-"Paste Without Formatting" = "Plakken zonder opmaak";
 "Show in Finder" = "Toon in Finder";
 "Secrets" = "Geheimen";
 "Possible password" = "Mogelijk wachtwoord";
@@ -98,3 +90,10 @@
 "Not on disk · gone at %@" = "Niet op schijf · weg om %@";
 "Recognize passwords and codes" = "Wachtwoorden en codes herkennen";
 "2FA codes, API keys, card numbers and password-like text are never saved and disappear after 5 minutes." = "2FA-codes, API-sleutels, kaartnummers en tekst die op een wachtwoord lijkt, worden nooit bewaard en verdwijnen na 5 minuten.";
+"Several lines" = "Meerdere regels";
+"History isn’t saved: no access to the Keychain. It is kept in memory until you quit." = "Geschiedenis wordt niet bewaard: geen toegang tot de sleutelhanger. Hij blijft in het geheugen tot je de app stopt.";
+"Hide during screen sharing" = "Verbergen bij scherm delen";
+"The popup doesn’t show up in screen sharing, recordings or screenshots." = "De popup is niet te zien bij scherm delen, opnames en screenshots.";
+"Copy Without Formatting" = "Kopiëren zonder opmaak";
+"Without formatting" = "Zonder opmaak";
+"Kept · ⌥↩ copies without" = "Behouden · ⌥↩ kopieert zonder";
