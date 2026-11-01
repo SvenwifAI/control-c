@@ -721,7 +721,9 @@ final class ClipStore: ObservableObject {
                 guard let self else { return }
                 self.imagesLoading.remove(job)
                 if let size { self.imageSizes[name] = size }
-                if let image { cache.setObject(image, forKey: name as NSString) }
+                // Redraw only on success: the views observe the store, so a failed load would start itself again.
+                guard let image else { return }
+                cache.setObject(image, forKey: name as NSString)
                 self.thumbnailVersion += 1
             }
         }
@@ -755,7 +757,9 @@ final class ClipStore: ObservableObject {
                 guard let self else { return }
                 self.thumbsLoading.remove(cacheKey as String)
                 if let byteSize { self.fileSizes[url.path] = byteSize }
-                if let thumb { self.thumbCache.setObject(thumb, forKey: cacheKey) }
+                // Nil means the file is gone; redrawing for it would only start this load again.
+                guard let thumb else { return }
+                self.thumbCache.setObject(thumb, forKey: cacheKey)
                 self.thumbnailVersion += 1
             }
         }
@@ -1748,6 +1752,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     @objc func openSettings() {
+        returnTo = nil // Settings opens in front; the keyboard stays with it
         hide()
         settingsWindow.show()
     }
@@ -1765,6 +1770,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         layoutPanel()
         panel.makeKeyAndOrderFront(nil)
         model.focusToken += 1
+        // Spotlight keeps its claim on the keyboard when it closes underneath the panel, so after the
+        // panel closed every key went to the hidden Spotlight and only beeped. Over Spotlight the app
+        // activates instead, and gives the keyboard back to the app you were in when the panel closes.
+        returnTo = nil
+        if Self.spotlightIsOpen(), let front = NSWorkspace.shared.frontmostApplication,
+           front.bundleIdentifier != Self.spotlightID {
+            returnTo = front
+            NSApp.activate()
+        }
+    }
+
+    /// The app to hand the keyboard back to, set while the panel is open over Spotlight.
+    private var returnTo: NSRunningApplication?
+    private static let spotlightID = "com.apple.Spotlight"
+
+    /// Whether Spotlight's search bar is on screen. Only which app owns each window is read, never
+    /// titles or contents, so this needs no permission.
+    private static func spotlightIsOpen() -> Bool {
+        guard let pid = NSRunningApplication.runningApplications(withBundleIdentifier: spotlightID).first?.processIdentifier,
+              let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+                as? [[CFString: Any]]
+        else { return false }
+        return windows.contains { ($0[kCGWindowOwnerPID] as? pid_t) == pid && ($0[kCGWindowAlpha] as? Double ?? 1) > 0 }
     }
 
     /// What the panel hangs off: the mouse pointer, in Cocoa screen coordinates.
@@ -1810,6 +1838,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         panel.orderOut(nil)
         model.confirmingClear = false
         store.finalizeDelete()
+        if let app = returnTo {
+            returnTo = nil
+            // Only while this app still has the keyboard: a click on another app has already moved it.
+            if NSApp.isActive { app.activate(from: .current) }
+        }
     }
 
     func windowDidResignKey(_ notification: Notification) { hide() }
