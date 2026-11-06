@@ -183,9 +183,6 @@ final class ClipStore: ObservableObject {
     private var lastChange = -1
     private var timer: Timer?
     private var expiryTimer: Timer?
-    private let imageCache = NSCache<NSString, NSImage>()
-    private let thumbCache = NSCache<NSString, NSImage>()
-    private var thumbsLoading: Set<String> = []
     private var fileSizes: [String: Int] = [:]
     private var iconCache: [String: NSImage] = [:]
     /// Image bytes that must not (or cannot) be on disk: memory-only mode, and images showing a secret.
@@ -642,7 +639,9 @@ final class ClipStore: ObservableObject {
         lastDeleted = nil
         items.removeAll()
         memoryImages.removeAll()
-        imageCache.removeAllObjects()
+        thumbs.removeAll()
+        previews.removeAll()
+        previewOrder.removeAll()
         saveScheduled = false
         io.sync {} // let pending writes finish before deleting
         #if DEMO
@@ -661,11 +660,16 @@ final class ClipStore: ObservableObject {
     }
 
     private func removeFile(of item: ClipItem) {
+        if let path = item.fileURLs.first?.path, !items.contains(where: { $0.fileURLs.first?.path == path }) {
+            thumbs["file|" + path] = nil
+            previews["file|" + path] = nil
+        }
         guard let f = item.imageFile, !items.contains(where: { $0.imageFile == f }),
               lastDeleted?.item.imageFile != f else { return }
         memoryImages[f] = nil
-        imageCache.removeObject(forKey: f as NSString)
-        thumbCache.removeObject(forKey: f as NSString)
+        thumbs[f] = nil
+        previews[f] = nil
+        previewOrder.removeAll { $0 == f }
         if let url = fileURL(f) {
             io.async { try? FileManager.default.removeItem(at: url) }
         }
@@ -673,35 +677,61 @@ final class ClipStore: ObservableObject {
 
     // MARK: Images and icons
 
+    /// Row thumbnails, small enough to keep them all. Not an NSCache on purpose: that empties itself
+    /// when memory runs low, and the views, which observe the store, then reloaded every image at once,
+    /// which used more memory, emptied it again, and made the images flicker in a loop.
+    private var thumbs: [String: NSImage] = [:]
+    /// The few large images last shown in the preview pane; the oldest makes room first.
+    private var previews: [String: NSImage] = [:]
+    private var previewOrder: [String] = []
+    private static let previewLimit = 6
+    /// Enough for the preview pane on a Retina screen.
+    private static let previewPixels = 1000
+    /// Images are decrypted and decoded one at a time per queue, so a list of large screenshots never
+    /// needs hundreds of megabytes at once. The preview doesn't wait for the row thumbnails, and copied
+    /// files have their own queue because they can be slow to read.
+    private let thumbQueue = DispatchQueue(label: "ControlC.thumbnails", qos: .userInitiated)
+    private let previewQueue = DispatchQueue(label: "ControlC.previews", qos: .userInitiated)
+    private let fileQueue = DispatchQueue(label: "ControlC.files", qos: .userInitiated)
+    private var loading: Set<String> = []
+
+    private func keep(_ image: NSImage, for key: String, large: Bool) {
+        guard large else { thumbs[key] = image; return }
+        previews[key] = image
+        previewOrder.removeAll { $0 == key }
+        previewOrder.append(key)
+        while previewOrder.count > Self.previewLimit { previews[previewOrder.removeFirst()] = nil }
+    }
+
     /// A small thumbnail of a copied image, for rows. Returns nil until it has been made off the main thread.
     func thumbnail(for item: ClipItem) -> NSImage? {
         guard let f = item.imageFile else { return nil }
-        if let cached = thumbCache.object(forKey: f as NSString) { return cached }
-        loadImage(f, maxPixels: 96, into: thumbCache)
+        if let image = thumbs[f] { return image }
+        loadImage(f, large: false)
         return nil
     }
 
     /// The image scaled for the preview pane, made off the main thread like the thumbnails.
     func previewImage(for item: ClipItem) -> NSImage? {
         guard let f = item.imageFile else { return nil }
-        if let cached = imageCache.object(forKey: f as NSString) { return cached }
-        loadImage(f, maxPixels: 1600, into: imageCache)
+        if let image = previews[f] { return image }
+        loadImage(f, large: true)
         return nil
     }
 
     /// The original size in pixels, known once a thumbnail or preview has loaded.
     func imageSize(for item: ClipItem) -> CGSize? { item.imageFile.flatMap { imageSizes[$0] } }
 
-    private var imagesLoading: Set<String> = []
     private var imageSizes: [String: CGSize] = [:]
 
     /// Decrypts and scales a stored image in the background, then redraws the rows that show it.
-    private func loadImage(_ name: String, maxPixels: Int, into cache: NSCache<NSString, NSImage>) {
-        let job = "\(maxPixels)|\(name)"
-        guard !imagesLoading.contains(job) else { return }
-        imagesLoading.insert(job)
+    private func loadImage(_ name: String, large: Bool) {
+        let job = (large ? "L|" : "S|") + name
+        guard !loading.contains(job) else { return }
+        loading.insert(job)
         let inMemory = memoryImages[name], key = self.key, url = fileURL(name)
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        let maxPixels = large ? Self.previewPixels : 96
+        (large ? previewQueue : thumbQueue).async { [weak self] in
             var data = inMemory
             if data == nil, let url, let raw = try? Data(contentsOf: url) {
                 data = url.pathExtension == "png" ? raw : key.flatMap { Vault.open(raw, with: $0, context: name) }
@@ -719,11 +749,12 @@ final class ClipStore: ObservableObject {
             }
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.imagesLoading.remove(job)
+                self.loading.remove(job)
                 if let size { self.imageSizes[name] = size }
                 // Redraw only on success: the views observe the store, so a failed load would start itself again.
-                guard let image else { return }
-                cache.setObject(image, forKey: name as NSString)
+                // Nothing is kept for an image deleted meanwhile.
+                guard let image, self.items.contains(where: { $0.imageFile == name }) else { return }
+                self.keep(image, for: name, large: large)
                 self.thumbnailVersion += 1
             }
         }
@@ -737,14 +768,15 @@ final class ClipStore: ObservableObject {
 
     /// A thumbnail for a copied file (or its Finder icon), made off the main thread: the file may be
     /// big, on a network volume or still in iCloud. Returns nil until it is ready.
-    func fileThumbnail(for item: ClipItem, size: Int = 96) -> NSImage? {
+    func fileThumbnail(for item: ClipItem, large: Bool = false) -> NSImage? {
         guard let url = item.fileURLs.first else { return nil }
-        let cacheKey = "\(size)|\(url.path)" as NSString
-        if let cached = thumbCache.object(forKey: cacheKey) { return cached }
-        guard !thumbsLoading.contains(cacheKey as String) else { return nil }
-        thumbsLoading.insert(cacheKey as String)
-        let isImage = item.imageFileURL != nil
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        let key = "file|" + url.path
+        if let image = large ? previews[key] : thumbs[key] { return image }
+        let job = (large ? "L|" : "S|") + key
+        guard !loading.contains(job) else { return nil }
+        loading.insert(job)
+        let isImage = item.imageFileURL != nil, size = large ? Self.previewPixels : 96
+        fileQueue.async { [weak self] in
             var thumb: NSImage?
             let byteSize = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
             if isImage, Self.isSafeImageFile(url), let src = CGImageSourceCreateWithURL(url as CFURL, nil),
@@ -755,11 +787,11 @@ final class ClipStore: ObservableObject {
             }
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.thumbsLoading.remove(cacheKey as String)
+                self.loading.remove(job)
                 if let byteSize { self.fileSizes[url.path] = byteSize }
                 // Nil means the file is gone; redrawing for it would only start this load again.
                 guard let thumb else { return }
-                self.thumbCache.setObject(thumb, forKey: cacheKey)
+                self.keep(thumb, for: key, large: large)
                 self.thumbnailVersion += 1
             }
         }
@@ -1540,7 +1572,7 @@ struct PreviewPane: View {
             .padding(20)
         } else if let item, item.isFile {
             VStack(spacing: 10) {
-                if item.imageFileURL != nil, let img = store.fileThumbnail(for: item, size: 1200) {
+                if item.imageFileURL != nil, let img = store.fileThumbnail(for: item, large: true) {
                     Image(nsImage: img)
                         .resizable()
                         .scaledToFit()
