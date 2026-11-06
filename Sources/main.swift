@@ -173,7 +173,9 @@ final class ClipStore: ObservableObject {
     /// Per format; the whole history is rewritten on save, so formatting must stay small.
     static let maxRichBytes = 500_000
 
-    @Published private(set) var items: [ClipItem] = []
+    @Published private(set) var items: [ClipItem] = [] { didSet { itemsVersion &+= 1 } }
+    /// Changes with every change to `items`, so the picker can reuse its filtering until then.
+    private(set) var itemsVersion = 0
     /// False when the Keychain refused the key: the history then lives in memory only.
     @Published private(set) var isPersistent = true
     /// Bumped when a file thumbnail finishes loading, so rows redraw.
@@ -184,7 +186,8 @@ final class ClipStore: ObservableObject {
     private var timer: Timer?
     private var expiryTimer: Timer?
     private var fileSizes: [String: Int] = [:]
-    private var iconCache: [String: NSImage] = [:]
+    /// Nil entries are apps that aren't installed: looked up once, not on every render.
+    private var iconCache: [String: NSImage?] = [:]
     /// Image bytes that must not (or cannot) be on disk: memory-only mode, and images showing a secret.
     private var memoryImages: [String: Data] = [:]
     /// Image encoding, encryption and disk writes, in order and off the main thread.
@@ -254,6 +257,7 @@ final class ClipStore: ObservableObject {
         }
         items.filter { $0.isImage && $0.ocrText == nil }.forEach(recognizeText(in:))
         let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.poll() }
+        t.tolerance = 0.05 // lets macOS group the wake-ups with other work
         RunLoop.main.add(t, forMode: .common)
         timer = t
         expiryTimer = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { [weak self] _ in
@@ -280,11 +284,13 @@ final class ClipStore: ObservableObject {
     /// The decrypted bytes of a stored image.
     private func imageData(_ name: String?) -> Data? {
         guard let name else { return nil }
-        if let data = memoryImages[name] { return data }
-        guard let url = fileURL(name), let raw = try? Data(contentsOf: url) else { return nil }
-        if url.pathExtension == "png" { return raw }
-        guard let key else { return nil }
-        return Vault.open(raw, with: key, context: name)
+        return memoryImages[name] ?? Self.readImage(name, at: fileURL(name), key: key)
+    }
+
+    /// Reads and decrypts a stored image file; safe off the main thread.
+    private static func readImage(_ name: String, at url: URL?, key: SymmetricKey?) -> Data? {
+        guard let url, let raw = try? Data(contentsOf: url) else { return nil }
+        return url.pathExtension == "png" ? raw : key.flatMap { Vault.open(raw, with: $0, context: name) }
     }
 
     @discardableResult
@@ -306,15 +312,14 @@ final class ClipStore: ObservableObject {
     func recognizeText(in item: ClipItem) {
         guard Settings.shared.recognizeText else { return }
         let id = item.id
-        let stored = item.imageFile != nil ? imageData(item.imageFile) : nil
-        let fileURL = item.imageFileURL
-        guard stored != nil || fileURL != nil else {
-            if let name = item.imageFile { persistImage(name) }
-            return
-        }
+        // Read and decrypted on the OCR queue, not here: at launch there can be a backlog of images,
+        // which then took the main thread and held every decrypted image in memory at once.
+        let name = item.imageFile, inMemory = name.flatMap { memoryImages[$0] }, key = self.key
+        let storedURL = name.flatMap(fileURL), fileURL = item.imageFileURL
+        guard name != nil || fileURL != nil else { return }
         ocrQueue.async {
             let handler: VNImageRequestHandler
-            if let stored {
+            if let name, let stored = inMemory ?? Self.readImage(name, at: storedURL, key: key) {
                 handler = VNImageRequestHandler(data: stored)
             } else if let fileURL, Self.isSafeImageFile(fileURL) {
                 handler = VNImageRequestHandler(url: fileURL)
@@ -624,6 +629,10 @@ final class ClipStore: ObservableObject {
         guard let (item, index) = lastDeleted else { return }
         lastDeleted = nil
         items.insert(item, at: min(index, items.count))
+        // Deleted before text recognition finished, the image was never written: finish that now.
+        if let name = item.imageFile, memoryImages[name] != nil, !item.isSensitive {
+            if item.ocrText == nil, Settings.shared.recognizeText { recognizeText(in: item) } else { persistImage(name) }
+        }
         save()
     }
 
@@ -732,10 +741,7 @@ final class ClipStore: ObservableObject {
         let inMemory = memoryImages[name], key = self.key, url = fileURL(name)
         let maxPixels = large ? Self.previewPixels : 96
         (large ? previewQueue : thumbQueue).async { [weak self] in
-            var data = inMemory
-            if data == nil, let url, let raw = try? Data(contentsOf: url) {
-                data = url.pathExtension == "png" ? raw : key.flatMap { Vault.open(raw, with: $0, context: name) }
-            }
+            let data = inMemory ?? Self.readImage(name, at: url, key: key)
             var image: NSImage?
             var size: CGSize?
             if let data, let source = CGImageSourceCreateWithData(data as CFData, nil) {
@@ -806,9 +812,8 @@ final class ClipStore: ObservableObject {
     func appIcon(for item: ClipItem) -> NSImage? {
         guard let id = item.appBundleID else { return nil }
         if let cached = iconCache[id] { return cached }
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else { return nil }
-        let icon = NSWorkspace.shared.icon(forFile: url.path)
-        iconCache[id] = icon
+        let icon = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id).map { NSWorkspace.shared.icon(forFile: $0.path) }
+        iconCache.updateValue(icon, forKey: id) // also stores nil, unlike a subscript assignment
         return icon
     }
 
@@ -852,12 +857,14 @@ final class ClipStore: ObservableObject {
         trimToLimit()
     }
 
-    /// Re-encrypts images still stored as plain PNG or in the first encrypted format.
+    /// Re-encrypts images still stored as plain PNG or in the first encrypted format. Of an image that
+    /// is already current only the first byte is read, so launching doesn't read every image in full.
     private func upgradeStoredImages() {
         guard let key else { return }
         for i in items.indices {
-            guard let name = items[i].imageFile, let url = fileURL(name),
-                  let raw = try? Data(contentsOf: url) else { continue }
+            guard let name = items[i].imageFile, let url = fileURL(name) else { continue }
+            if url.pathExtension != "png", Self.firstByte(of: url).map(Vault.isCurrentFormat) ?? true { continue }
+            guard let raw = try? Data(contentsOf: url) else { continue }
             if url.pathExtension == "png" {
                 let encName = String(name.dropLast(4)) + ".enc"
                 if Self.writeSealed(raw, to: dir.appendingPathComponent(encName), key: key) {
@@ -867,6 +874,12 @@ final class ClipStore: ObservableObject {
                 _ = Self.writeSealed(plain, to: url, key: key)
             }
         }
+    }
+
+    private static func firstByte(of url: URL) -> Data? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        return try? handle.read(upToCount: 1)
     }
 
     /// Deletes image files no item refers to: leftovers of a crash, a quit right after deleting, or a
@@ -957,6 +970,8 @@ final class PickerModel: ObservableObject {
     }
 
     private func reanchor() {
+        // A scope whose last item went (deleted, expired, cleared) would leave an empty list.
+        if let k = kindFilter, !availableKinds.contains(k) { kindFilter = nil }
         guard let id = selectedID, let i = filtered.firstIndex(where: { $0.id == id }) else {
             clampSelection()
             return
@@ -966,9 +981,17 @@ final class PickerModel: ObservableObject {
 
     @Published var kindFilter: ClipKind? { didSet { selection = 0 } }
 
+    // The view asks for these several times per keystroke and per loaded thumbnail; each time
+    // classified every item again. They are worked out once per change of the list instead.
+    private var kindsMemo: (version: Int, kinds: [ClipKind])?
+    private var filterMemo: (version: Int, query: String, kind: ClipKind?, items: [ClipItem])?
+
     var availableKinds: [ClipKind] {
+        if let m = kindsMemo, m.version == store.itemsVersion { return m.kinds }
         let present = Set(store.items.map(\.kind))
-        return ClipKind.allCases.filter(present.contains)
+        let kinds = ClipKind.allCases.filter(present.contains)
+        kindsMemo = (store.itemsVersion, kinds)
+        return kinds
     }
 
     /// ⌘← / ⌘→ steps through "Alles" and the kinds present.
@@ -979,13 +1002,17 @@ final class PickerModel: ObservableObject {
     }
 
     var filtered: [ClipItem] {
+        if let m = filterMemo, m.version == store.itemsVersion, m.query == query, m.kind == kindFilter { return m.items }
         let q = query.trimmingCharacters(in: .whitespaces)
-        let items = kindFilter.map { kind in store.items.filter { $0.kind == kind } } ?? store.items
-        guard !q.isEmpty else { return items }
-        return items.filter {
-            $0.searchText.localizedCaseInsensitiveContains(q)
-                || ($0.appName ?? "").localizedCaseInsensitiveContains(q)
+        var items = kindFilter.map { kind in store.items.filter { $0.kind == kind } } ?? store.items
+        if !q.isEmpty {
+            items = items.filter {
+                $0.searchText.localizedCaseInsensitiveContains(q)
+                    || ($0.appName ?? "").localizedCaseInsensitiveContains(q)
+            }
         }
+        filterMemo = (store.itemsVersion, query, kindFilter, items)
+        return items
     }
 
     var selected: ClipItem? {
@@ -1004,14 +1031,18 @@ final class PickerModel: ObservableObject {
     }
 
     @Published var confirmingClear = false
+    private var deleteGeneration = 0
 
     /// Deletes with a short undo window; the image file is only removed once that window closes.
     func delete(_ item: ClipItem) {
         confirmingClear = false
         store.delete(item)
         clampSelection()
+        deleteGeneration += 1
+        let generation = deleteGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
-            if self?.store.lastDeleted?.item.id == item.id { self?.store.finalizeDelete() }
+            // An undo and a new delete restart the six seconds; an older timer must not end them early.
+            if let self, self.deleteGeneration == generation { self.store.finalizeDelete() }
         }
     }
 
@@ -1085,7 +1116,10 @@ struct PickerView: View {
         .padding(Self.margin)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear { searchFocused = true }
-        .onChange(of: model.focusToken) { searchFocused = true }
+        .onChange(of: model.focusToken) {
+            searchFocused = true
+            hoveredID = nil // the panel may have hidden under the pointer, so no hover exit came
+        }
     }
 
     private var searchField: some View {
@@ -1136,14 +1170,16 @@ struct PickerView: View {
             kindBar
             if items.isEmpty {
                 emptyState
-            } else if model.expanded {
-                HStack(spacing: 0) {
-                    list(items).frame(width: 320)
-                    Divider().opacity(0.4).padding(.vertical, 8)
-                    PreviewPane(item: model.selected, store: store)
-                }
             } else {
-                list(items)
+                // One list in both sizes: separate branches made Tab rebuild it at the top, which
+                // could leave the selected row out of sight.
+                HStack(spacing: 0) {
+                    list(items).frame(width: model.expanded ? 320 : nil)
+                    if model.expanded {
+                        Divider().opacity(0.4).padding(.vertical, 8)
+                        PreviewPane(item: model.selected, store: store)
+                    }
+                }
             }
             if model.expanded { footer }
         }
@@ -1538,8 +1574,9 @@ struct PreviewPane: View {
                         meta(L("Stored"), L("Not on disk · gone at %@", until.formatted(date: .omitted, time: .shortened)))
                     } else if let t = item.text {
                         if item.hasFormatting { meta(L("Formatting"), L("Kept · ⌥↩ copies without")) }
-                        let lines = t.split(separator: "\n", omittingEmptySubsequences: false).count
-                        meta(L("Content"), lines == 1 ? L("%d characters · 1 line", t.count) : L("%d characters · %d lines", t.count, lines))
+                        let c = Self.counts(item, t)
+                        meta(L("Content"), c.lines == 1 ? L("%d characters · 1 line", c.characters)
+                                                       : L("%d characters · %d lines", c.characters, c.lines))
                     } else if item.isImage {
                         if let size = store.imageSize(for: item) {
                             meta(L("Size"), "\(Int(size.width)) × \(Int(size.height))")
@@ -1612,6 +1649,7 @@ struct PreviewPane: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(18)
             }
+            .id(item.id) // each item opens at the top, without the previous one's selection
             // Links in copied text are shown, not followed: their target can differ from their label.
             .environment(\.openURL, OpenURLAction { _ in .discarded })
         } else if let item, let text = item.text {
@@ -1624,9 +1662,25 @@ struct PreviewPane: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(18)
             }
+            .id(item.id)
         } else {
             Color.clear
         }
+    }
+
+    private final class Counts {
+        let characters: Int, lines: Int
+        init(_ characters: Int, _ lines: Int) { self.characters = characters; self.lines = lines }
+    }
+    private static let countsCache = NSCache<NSString, Counts>()
+
+    /// Counted once per item: a long text took a full pass on every render of the pane.
+    private static func counts(_ item: ClipItem, _ text: String) -> Counts {
+        let key = item.id.uuidString as NSString
+        if let cached = countsCache.object(forKey: key) { return cached }
+        let counts = Counts(text.count, text.utf8.reduce(1) { $1 == 0x0A ? $0 + 1 : $0 })
+        countsCache.setObject(counts, forKey: key)
+        return counts
     }
 
     private final class Rendered { let value: AttributedString?; init(_ v: AttributedString?) { value = v } }
@@ -1635,7 +1689,8 @@ struct PreviewPane: View {
     /// The RTF rendered as it will paste, parsed once per item; skipped for very large documents.
     private static func formatted(_ item: ClipItem) -> AttributedString? {
         guard let rtf = item.rtf, rtf.count < 200_000 else { return nil }
-        let key = item.id.uuidString as NSString
+        // Copying the same text again replaces its formatting and its date.
+        let key = "\(item.id.uuidString)|\(item.date.timeIntervalSinceReferenceDate)" as NSString
         if let cached = renderedCache.object(forKey: key) { return cached.value }
         let value = NSAttributedString(rtf: rtf, documentAttributes: nil)
             .flatMap { try? AttributedString($0, including: \.appKit) }
@@ -1761,6 +1816,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         settings.onSharingChange = { [weak self] hide in self?.panel.sharingType = hide ? .none : .readOnly }
         settings.historyIsSaved = store.isPersistent
         storageObserver = store.$isPersistent.sink { [weak self] saved in self?.settings.historyIsSaved = saved }
+        setupMainMenu()
         setupStatusItem()
 
         #if DEMO
@@ -1784,7 +1840,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     @objc func openSettings() {
-        returnTo = nil // Settings opens in front; the keyboard stays with it
+        // Settings opens in front and keeps the keyboard; it goes back to your app when Settings closes.
+        if let app = returnTo { settingsWindow.previousApp = app }
+        returnTo = nil
         hide()
         settingsWindow.show()
     }
@@ -1850,7 +1908,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// Places the panel just below the anchor, or above it when there is no room, inside the visible screen.
     func layoutPanel() {
         let size = panelSize
-        let screen = NSScreen.screens.first { NSMouseInRect(anchor.origin, $0.frame, false) } ?? NSScreen.main
+        let screen = (userMoved ? panel.screen : nil)
+            ?? NSScreen.screens.first { NSMouseInRect(anchor.origin, $0.frame, false) } ?? NSScreen.main
         guard let vf = screen?.visibleFrame else { return }
         var x = anchor.minX - 10 - PickerView.margin
         var y = anchor.minY - 6 + PickerView.margin - size.height
@@ -1926,6 +1985,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     // MARK: Menu bar
 
+    /// Never seen while the popup is open, but AppKit sends ⌘X, ⌘C, ⌘V and ⌘A through the main menu:
+    /// without one they beeped in the search field. No Undo item, so ⌘Z keeps restoring deleted clips.
+    func setupMainMenu() {
+        let edit = NSMenu(title: L("Edit"))
+        edit.addItem(withTitle: L("Cut"), action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: L("Copy"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: L("Paste"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: L("Select All"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        let window = NSMenu(title: L("Window"))
+        window.addItem(withTitle: L("Close"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        let main = NSMenu()
+        for submenu in [NSMenu(), edit, window] {
+            let item = NSMenuItem()
+            item.submenu = submenu
+            main.addItem(item)
+        }
+        NSApp.mainMenu = main
+    }
+
     func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(systemSymbolName: "list.clipboard", accessibilityDescription: "Control+C")
@@ -1956,8 +2034,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         alert.informativeText = L("All %d items will be deleted. This can’t be undone.", store.items.count)
         alert.addButton(withTitle: L("Clear All")).hasDestructiveAction = true
         alert.addButton(withTitle: L("Cancel"))
+        // From the menu bar the alert makes this app active; afterwards the keyboard goes back.
+        let previous = NSApp.isActive ? nil : NSWorkspace.shared.frontmostApplication
         NSApp.activate()
         if alert.runModal() == .alertFirstButtonReturn { model.clearAll() }
+        if let previous, NSApp.isActive { previous.activate(from: .current) }
     }
 
     @objc func toggleLogin() {

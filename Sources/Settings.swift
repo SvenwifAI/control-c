@@ -148,6 +148,9 @@ final class SettingsWindowController {
     static let windowID = NSUserInterfaceItemIdentifier("ControlC.settings")
     private var window: NSWindow?
     private var observers: [NSObjectProtocol] = []
+    /// The app you were in. This app has no other window to give the keyboard to, so without handing
+    /// it back, typing after closing Settings went nowhere until you clicked a window.
+    var previousApp: NSRunningApplication?
     let onClearHistory: () -> Void
 
     init(onClearHistory: @escaping () -> Void) { self.onClearHistory = onClearHistory }
@@ -169,7 +172,13 @@ final class SettingsWindowController {
                     Settings.shared.isRecording = false
                 })
             }
+            observers.append(NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w,
+                                                                    queue: .main) { [weak self] _ in
+                if let app = self?.previousApp, NSApp.isActive { app.activate(from: .current) }
+                self?.previousApp = nil
+            })
         }
+        if !NSApp.isActive { previousApp = NSWorkspace.shared.frontmostApplication }
         // activate() is cooperative since macOS 14 and may be declined while another app is in use,
         // so bring the window forward regardless.
         NSApp.activate()

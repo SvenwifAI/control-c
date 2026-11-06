@@ -97,3 +97,10 @@
 "Copy Without Formatting" = "Kopiëren zonder opmaak";
 "Without formatting" = "Zonder opmaak";
 "Kept · ⌥↩ copies without" = "Behouden · ⌥↩ kopieert zonder";
+
+/* Main menu (only visible while Settings or an alert is open) */
+"Edit" = "Wijzig";
+"Cut" = "Knip";
+"Paste" = "Plak";
+"Select All" = "Selecteer alles";
+"Window" = "Venster";
