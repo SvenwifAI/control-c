@@ -51,6 +51,8 @@ IDENTITIES=$(security find-identity -p codesigning 2>/dev/null || true)
 codesign --force --options runtime --sign "$IDENTITY" --identifier com.svenvanrooijen.controlc "$APP"
 
 pkill -x ControlC 2>/dev/null || true
+# Opening while the old copy is still quitting fails (error -600), so wait until it's gone.
+for _ in {1..50}; do pgrep -x ControlC >/dev/null || break; sleep 0.1; done
 rm -rf /Applications/ControlC.app
 cp -R "$APP" /Applications/
 open /Applications/ControlC.app

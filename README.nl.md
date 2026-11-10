@@ -24,7 +24,7 @@ cd control-c
 
 `build.sh` bouwt de app uit de broncode in `Sources/`, zet hem in `/Applications/ControlC.app` en start hem. Er wordt niets gedownload.
 
-**Geen toestemmingen nodig:** Control+C vraagt niet om Toegankelijkheid, schermopname of iets anders. Hij leest en schrijft alleen het klembord, zoals elke app dat kan. Kies je een item, dan staat het op je klembord en plak je het met ⌘V.
+**Geen toestemmingen nodig:** Control+C vraagt niet om Toegankelijkheid, schermopname of iets anders. Hij leest en schrijft het klembord, zoals elke app dat kan; van bestanden die je kopieert leest hij ook het bestand zelf, voor een miniatuur en om tekst in afbeeldingen te herkennen. Kies je een item, dan staat het op je klembord en plak je het met ⌘V.
 
 **Instellingen:** klik op het klembord-icoon in de menubalk en kies *Instellingen…*, of druk op `⌘,` of het tandwiel in de popup. Daar kies je je eigen sneltoets, hoeveel items hij bewaart en hoe lang, welke apps hij moet negeren, en of hij moet starten bij inloggen.
 
@@ -68,7 +68,7 @@ cd control-c
 - **Uitgesloten apps:** wat je kopieert in apps die je in Instellingen uitsluit, wordt niet bewaard, ook niet als je vlak na het kopiëren van app wisselt. Een app uitsluiten haalt ook weg wat die app al had toegevoegd.
 - **Items verlopen na 7 dagen** zonder gebruik, en er worden hooguit 60 bewaard (geheimen tellen niet mee). Beide pas je aan in Instellingen. Tekst groter dan 1 MB en afbeeldingen groter dan 20 MB of 50 megapixel worden niet bewaard. *Geschiedenis wissen* verwijdert alle bestanden en vervangt de sleutel, zodat oude kopieën elders ook onleesbaar worden.
 - **Verborgen bij scherm delen** (standaard): de popup vraagt macOS om buiten scherm delen, opnames en screenshots te blijven. De meeste apps houden zich daaraan; controleer het in jouw app voordat je erop vertrouwt.
-- **Geen speciale toestemmingen.** De app gebruikt geen Toegankelijkheid, en kan dus niet in andere apps typen of hun vensters uitlezen. Hij is gebouwd met de hardened runtime, zodat geen ander programma code in de app kan laden om de sleutel van je geschiedenis te lenen.
+- **Geen speciale toestemmingen.** De app gebruikt geen Toegankelijkheid, en kan dus niet in andere apps typen of uitlezen wat er in hun vensters staat. Om je toetsenbord netjes terug te geven als je hem boven Spotlight opent, kijkt hij of de zoekbalk van Spotlight in beeld is: hij ziet bij welke app elk venster hoort, nooit titels of inhoud. Bestanden die je kopieert leest hij alleen voor een miniatuur en tekstherkenning, en bestanden die alleen online staan (iCloud, Dropbox, OneDrive) laat hij met rust, zodat er niets wordt gedownload. Hij is gebouwd met de hardened runtime, zodat geen ander programma code in de app kan laden om de sleutel van je geschiedenis te lenen.
 - **Let op:** het herkennen van geheimen blijft een inschatting. Een woord met een getal erachter (`Zomer2026`), een wachtwoord van alleen letters, een wachtzin met spaties of streepjes, en alles na de eerste 64 KB van een kopie kunnen erdoorheen glippen. Zo'n item staat dan nog steeds versleuteld op schijf, en je verwijdert het met `⌘⌫`.
 - **Gebruik alleen een versie die je zelf hebt gebouwd.** Neem geen kant-en-klare `.app` van iemand anders over: die kun je niet controleren en hij ziet wel alles wat je kopieert.
 

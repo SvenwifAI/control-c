@@ -50,7 +50,7 @@ cd control-c
 
 `build.sh` compiles the app from `Sources/`, installs it as `/Applications/ControlC.app` and starts it. Nothing is downloaded.
 
-**No permissions needed:** Control+C doesn't ask for Accessibility, Screen Recording or anything else. It only reads and writes the clipboard, like any app can. Choosing an item puts it on your clipboard; you paste it with ⌘V.
+**No permissions needed:** Control+C doesn't ask for Accessibility, Screen Recording or anything else. It reads and writes the clipboard, like any app can; for files you copy it also reads the file itself, to show a thumbnail and recognize text in images. Choosing an item puts it on your clipboard; you paste it with ⌘V.
 
 **Settings:** choose *Settings…* from the clipboard icon in the menu bar, or press `⌘,` or the gear in the popup. You can set your shortcut, how many items to keep and for how long, apps to ignore, and whether Control+C starts at login.
 
@@ -90,7 +90,7 @@ You can drag the popup by any empty spot.
 - **Excluded apps:** nothing you copy in apps you exclude in Settings is stored, including a copy made right before switching apps. Excluding an app also removes what it already added.
 - **Items expire after 7 days** without use, and at most 60 are kept (secrets don't count). Both are adjustable in Settings. Text over 1 MB and images over 20 MB or 50 megapixels are never stored. *Clear History* deletes every file and replaces the key, so old copies elsewhere can't be read either.
 - **Hidden from screen sharing** by default: the popup asks macOS to be left out of screen sharing, recordings and screenshots. Most apps respect that; check yours before relying on it.
-- **No special permissions.** The app doesn't use Accessibility, so it can't type into other apps or read their windows. It is built with the hardened runtime, so no other program can load code into it to borrow its Keychain key.
+- **No special permissions.** The app doesn't use Accessibility, so it can't type into other apps or read what's in their windows. To hand the keyboard back properly when you open it over Spotlight, it checks whether Spotlight's search bar is on screen: it sees which app each window belongs to, never titles or contents. Files you copy are only read for a thumbnail and text recognition, and online-only files (iCloud, Dropbox, OneDrive) are left alone so nothing gets downloaded. It is built with the hardened runtime, so no other program can load code into it to borrow its Keychain key.
 - **Heads-up:** recognizing secrets is a best guess. A word followed by a number (`Summer2026`), a password of only letters, a passphrase with spaces or dashes, and anything past the first 64 KB of a copy can slip through. Such an item is still encrypted on disk, and you can delete it with `⌘⌫`.
 - **Only run a build you made yourself** from this source. A prebuilt `.app` from someone else can't be verified, yet it would see everything you copy.
 

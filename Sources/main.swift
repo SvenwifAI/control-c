@@ -328,7 +328,8 @@ final class ClipStore: ObservableObject {
             request.recognitionLevel = .accurate
             request.usesLanguageCorrection = true
             request.recognitionLanguages = ["nl-NL", "en-US"]
-            try? handler.perform([request])
+            // If recognition fails, the image was never checked for a secret: it stays in memory only.
+            guard (try? handler.perform([request])) != nil else { return }
             let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
             let secret = Secrets.containsCredential(text)
             DispatchQueue.main.async { [weak self] in
@@ -339,6 +340,7 @@ final class ClipStore: ObservableObject {
                 } else if let name = self.items[i].imageFile, self.memoryImages[name] != nil {
                     self.persistImage(name)
                 }
+                self.trimToLimit()
                 self.save()
             }
         }
@@ -351,14 +353,19 @@ final class ClipStore: ObservableObject {
         guard let v = try? url.resourceValues(forKeys: keys), let size = v.fileSize, size <= maxImageBytes,
               v.volumeIsLocal != false else { return false }
         if v.isUbiquitousItem == true, v.ubiquitousItemDownloadingStatus != .current { return false }
+        // Online-only files (Dropbox, OneDrive and other cloud folders) would be downloaded just to look at.
+        var info = stat()
+        guard stat(url.path, &info) == 0, info.st_flags & UInt32(SF_DATALESS) == 0 else { return false }
         return pixelCount(of: CGImageSourceCreateWithURL(url as CFURL, nil)).map { $0 <= maxImagePixels } ?? false
     }
 
     private static func pixelCount(of source: CGImageSource?) -> Int? {
         guard let source, let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-              let w = props[kCGImagePropertyPixelWidth] as? Int, let h = props[kCGImagePropertyPixelHeight] as? Int
-        else { return nil }
-        return w * h
+              let w = props[kCGImagePropertyPixelWidth] as? Int, let h = props[kCGImagePropertyPixelHeight] as? Int,
+              w > 0, h > 0 else { return nil }
+        // A crafted header can claim sides whose product overflows, which would crash the app.
+        let (pixels, overflow) = w.multipliedReportingOverflow(by: h)
+        return overflow ? nil : pixels
     }
 
     // MARK: Secrets
@@ -380,14 +387,14 @@ final class ClipStore: ObservableObject {
     private func sweepSecrets() {
         nextSecretSweep = Date().addingTimeInterval(5)
         let now = Date()
-        let expired = items.filter { ($0.sensitiveUntil ?? .distantFuture) < now }
-        guard !expired.isEmpty else { return }
-        items.removeAll { ($0.sensitiveUntil ?? .distantFuture) < now }
-        expired.forEach(removeFile(of:))
         if let deleted = lastDeleted?.item, deleted.isSensitive, (deleted.sensitiveUntil ?? now) < now {
             lastDeleted = nil
             removeFile(of: deleted)
         }
+        let expired = items.filter { ($0.sensitiveUntil ?? .distantFuture) < now }
+        guard !expired.isEmpty else { return }
+        items.removeAll { ($0.sensitiveUntil ?? .distantFuture) < now }
+        expired.forEach(removeFile(of:))
     }
 
     /// Drops stored items that look like secrets, e.g. after turning recognition back on.
@@ -496,7 +503,9 @@ final class ClipStore: ObservableObject {
             }
             guard png.count <= Self.maxImageBytes else { return }
             let hash = SHA256.hash(data: png).map { String(format: "%02x", $0) }.joined()
-            let name = "\(hash.prefix(24)).enc"
+            // A random name: one derived from the content would let anyone with the folder but without the
+            // key confirm that you copied a known image. Duplicates are found by `imageHash` instead.
+            let name = (0..<12).map { _ in String(format: "%02x", UInt8.random(in: .min ... .max)) }.joined() + ".enc"
             DispatchQueue.main.async {
                 guard let self else { return }
                 // A copy of an image already in the list (secret or not) changes nothing on disk.
@@ -504,10 +513,13 @@ final class ClipStore: ObservableObject {
                 // Kept in memory until it's known not to show a secret; only then written to disk.
                 self.memoryImages[name] = png
                 let item = ClipItem(imageFile: name, imageHash: hash, appBundleID: appID, appName: appName)
-                self.insert(item)
                 if Settings.shared.recognizeText && Settings.shared.detectSecrets {
+                    // Not trimmed yet: an image showing a secret doesn't count towards the limit, so no
+                    // older item may make room for it before recognition has decided.
+                    self.insert(item, trim: false)
                     self.recognizeText(in: item) // writes the image afterwards if it holds no secret
                 } else {
+                    self.insert(item)
                     self.persistImage(name)
                     self.recognizeText(in: item)
                 }
@@ -532,9 +544,9 @@ final class ClipStore: ObservableObject {
 
     // MARK: List changes
 
-    private func insert(_ item: ClipItem) {
+    private func insert(_ item: ClipItem, trim: Bool = true) {
         items.insert(item, at: 0)
-        trimToLimit()
+        if trim { trimToLimit() }
         save()
     }
 
@@ -577,6 +589,8 @@ final class ClipStore: ObservableObject {
 
     /// Puts an item back on the system clipboard in one write; `plain` drops its formatting.
     func copyToPasteboard(_ item: ClipItem, promote shouldPromote: Bool = true, plain: Bool = false) {
+        // A menu or row may still hold the item from before recognition marked it as a secret.
+        let item = items.first { $0.id == item.id } ?? item
         let pb = NSPasteboard.general
         if item.isSensitive {
             // Concealed, in the same write as the text, and kept off Universal Clipboard.
@@ -620,8 +634,7 @@ final class ClipStore: ObservableObject {
     func delete(_ item: ClipItem) {
         guard let i = items.firstIndex(where: { $0.id == item.id }) else { return }
         finalizeDelete()
-        items.remove(at: i)
-        lastDeleted = (item, i)
+        lastDeleted = (items.remove(at: i), i) // as it is now, not the caller's older copy
         save()
     }
 
@@ -796,7 +809,8 @@ final class ClipStore: ObservableObject {
                 self.loading.remove(job)
                 if let byteSize { self.fileSizes[url.path] = byteSize }
                 // Nil means the file is gone; redrawing for it would only start this load again.
-                guard let thumb else { return }
+                // Nothing is kept for an item deleted meanwhile.
+                guard let thumb, self.items.contains(where: { $0.fileURLs.first?.path == url.path }) else { return }
                 self.keep(thumb, for: key, large: large)
                 self.thumbnailVersion += 1
             }
@@ -1054,6 +1068,7 @@ final class PickerModel: ObservableObject {
 
     func clearAll() {
         store.clear()
+        PreviewPane.forgetRendered()
         confirmingClear = false
         selection = 0
     }
@@ -1684,7 +1699,17 @@ struct PreviewPane: View {
     }
 
     private final class Rendered { let value: AttributedString?; init(_ v: AttributedString?) { value = v } }
-    private static let renderedCache = NSCache<NSString, Rendered>()
+    private static let renderedCache: NSCache<NSString, Rendered> = {
+        let cache = NSCache<NSString, Rendered>()
+        cache.countLimit = 20 // the last previews, not every formatted text ever shown
+        return cache
+    }()
+
+    /// Clear History also drops what the preview rendered, so no copy of deleted text stays in memory.
+    static func forgetRendered() {
+        renderedCache.removeAllObjects()
+        countsCache.removeAllObjects()
+    }
 
     /// The RTF rendered as it will paste, parsed once per item; skipped for very large documents.
     private static func formatted(_ item: ClipItem) -> AttributedString? {
@@ -1927,6 +1952,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     func hide() {
         panel.orderOut(nil)
+        model.query = "" // a pasted secret must not stay in the search field until the next open
         model.confirmingClear = false
         store.finalizeDelete()
         if let app = returnTo {
