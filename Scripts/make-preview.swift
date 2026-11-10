@@ -40,7 +40,7 @@ if let icon = NSImage(contentsOf: root.appendingPathComponent("Resources/AppIcon
     icon.draw(in: rect(W / 2 - 400, pad - 6, 132, 132))
 }
 text("Control+C", size: 100, weight: .bold, color: .black, at: rect(W / 2 - 250, pad + 2, 800, 130))
-text("Je klembordgeschiedenis, één sneltoets weg.", size: 46, weight: .regular,
+text("De nieuwe klembord-app voor je MacBook. Druk ⌘↩ en alles wat je kopieerde staat klaar.", size: 46, weight: .regular,
      color: NSColor(white: 0.35, alpha: 1), at: rect(0, pad + 170, W, 70), align: .center)
 
 // Screenshots: equal height, side by side, each in a rounded frame with a soft shadow.
