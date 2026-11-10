@@ -22,6 +22,7 @@ enum Vault {
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecSuccess, let data = result as? Data, data.count == 32 {
+            if isReadableByOthers() { restoreAccess(data) }
             return SymmetricKey(data: data)
         }
         guard status == errSecItemNotFound else {
@@ -42,6 +43,46 @@ enum Vault {
             return nil
         }
         return key
+    }
+
+    private static var item: [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
+    }
+
+    /// True when the Keychain lets anything besides this app read the key without asking. That happens
+    /// when "Always Allow" was clicked on a prompt from another program, such as the `security` tool:
+    /// from then on every process of this user could decrypt the history.
+    private static func isReadableByOthers() -> Bool {
+        var ref: CFTypeRef?
+        let query = item.merging([kSecReturnRef as String: true, kSecMatchLimit as String: kSecMatchLimitOne]) { $1 }
+        guard SecItemCopyMatching(query as CFDictionary, &ref) == errSecSuccess, let ref,
+              CFGetTypeID(ref) == SecKeychainItemGetTypeID() else { return false }
+        var access: SecAccess?
+        guard SecKeychainItemCopyAccess(ref as! SecKeychainItem, &access) == errSecSuccess, let access,
+              let acls = SecAccessCopyMatchingACLList(access, kSecACLAuthorizationDecrypt) as? [SecACL] else { return false }
+        for acl in acls {
+            var apps: CFArray?, description: CFString?, prompt = SecKeychainPromptSelector()
+            guard SecACLCopyContents(acl, &apps, &description, &prompt) == errSecSuccess else { continue }
+            guard let apps = apps as? [SecTrustedApplication] else { return true } // no list: any program
+            for app in apps {
+                var data: CFData?
+                guard SecTrustedApplicationCopyData(app, &data) == errSecSuccess, let data = data as Data? else { return true }
+                if String(decoding: data.prefix { $0 != 0 }, as: UTF8.self) != Bundle.main.bundlePath { return true }
+            }
+        }
+        return false
+    }
+
+    /// Stores the same key again as a fresh item, which only this app may read.
+    private static func restoreAccess(_ data: Data) {
+        guard SecItemDelete(item as CFDictionary) == errSecSuccess else { return }
+        let add = item.merging([kSecAttrLabel as String: "Control+C history key", kSecValueData as String: data]) { $1 }
+        // The key must not get lost between deleting and adding: try again before giving up.
+        for _ in 0..<3 where SecItemAdd(add as CFDictionary, nil) == errSecSuccess {
+            NSLog("Control+C: another program could read the history key; access is limited to this app again")
+            return
+        }
+        NSLog("Control+C: could not store the history key again")
     }
 
     /// Format byte in front of every sealed file. Version 1 binds the ciphertext to its file name,

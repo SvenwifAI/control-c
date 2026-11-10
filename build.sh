@@ -55,5 +55,6 @@ pkill -x ControlC 2>/dev/null || true
 for _ in {1..50}; do pgrep -x ControlC >/dev/null || break; sleep 0.1; done
 rm -rf /Applications/ControlC.app
 cp -R "$APP" /Applications/
-open /Applications/ControlC.app
+# Right after the old copy quit, opening can still fail once (error -600): try again briefly.
+for _ in {1..10}; do open /Applications/ControlC.app 2>/dev/null && break; sleep 0.5; done
 echo "Control+C draait. Druk ⌘↩."

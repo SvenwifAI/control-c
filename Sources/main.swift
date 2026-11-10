@@ -491,7 +491,9 @@ final class ClipStore: ObservableObject {
     private func captureImage(_ raw: Data, appID: String?, appName: String?) {
         io.async { [weak self] in
             let source = CGImageSourceCreateWithData(raw as CFData, nil)
-            guard let source, let pixels = Self.pixelCount(of: source), pixels <= Self.maxImagePixels else { return }
+            // Complete data only: a cut-off image has a valid header but can't be shown.
+            guard let source, CGImageSourceGetStatusAtIndex(source, 0) == .statusComplete,
+                  let pixels = Self.pixelCount(of: source), pixels <= Self.maxImagePixels else { return }
             var png = raw
             if (CGImageSourceGetType(source) as String?) != UTType.png.identifier {
                 guard let cg = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return }
