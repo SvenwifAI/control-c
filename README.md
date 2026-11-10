@@ -59,7 +59,7 @@ cd control-c
 | Key | Action |
 |---|---|
 | `⌘↩` | Open or close the popup (this takes ⌘↩ away from other apps, such as *send* in Slack or Teams; pick another shortcut in Settings if that clashes) |
-| Type | Search, including text in images |
+| Type | Search, including text in images (`⌘V`, `⌘A`, `⌘C` and `⌘X` work in the search field) |
 | `↑` `↓` | Move the selection |
 | `↩` or double-click | Copy and close, then paste with ⌘V |
 | Single click | Copy and keep the popup open |
@@ -93,10 +93,11 @@ You can drag the popup by any empty spot.
 - **No special permissions.** The app doesn't use Accessibility, so it can't type into other apps or read what's in their windows. To hand the keyboard back properly when you open it over Spotlight, it checks whether Spotlight's search bar is on screen: it sees which app each window belongs to, never titles or contents. Files you copy are only read for a thumbnail and text recognition, and online-only files (iCloud, Dropbox, OneDrive) are left alone so nothing gets downloaded. It is built with the hardened runtime, so no other program can load code into it to borrow its Keychain key.
 - **Heads-up:** recognizing secrets is a best guess. A word followed by a number (`Summer2026`), a password of only letters, a passphrase with spaces or dashes, and anything past the first 64 KB of a copy can slip through. Such an item is still encrypted on disk, and you can delete it with `⌘⌫`.
 - **Only run a build you made yourself** from this source. A prebuilt `.app` from someone else can't be verified, yet it would see everything you copy.
+- **Never click "Always Allow" for another program.** If macOS asks whether some other program (such as `security`) may use the *Control+C history key*, click Deny. Should it happen anyway, Control+C notices at its next launch and limits the key to itself again.
 
 ## Fewer Keychain prompts after rebuilding (optional)
 
-The Keychain gives the history key only to the app that created it, recognized by its code signature. Without a stable certificate, every `./build.sh` makes a new signature, so macOS asks once more whether Control+C may use its key. Create a code-signing certificate named **Control+C Signing** in Keychain Access (Certificate Assistant → Create a Certificate → type *Code Signing*). `build.sh` then uses it automatically and the question doesn't come back.
+The Keychain gives the history key only to the app that created it, recognized by its code signature. Without a stable certificate, every `./build.sh` makes a new signature, so macOS asks once more whether Control+C may use its key. Create a code-signing certificate named **Control+C Signing** in Keychain Access (Certificate Assistant → Create a Certificate → type *Code Signing*). `build.sh` then uses it automatically and the question doesn't come back. When macOS asks whether `codesign` may use that certificate's key during a build, choose *Allow*, not *Always Allow*: with *Always Allow* any program on your account could sign itself as Control+C and get the history key.
 
 ## Uninstall
 

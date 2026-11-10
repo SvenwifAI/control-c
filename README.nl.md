@@ -33,7 +33,7 @@ cd control-c
 | | |
 |---|---|
 | `⌘↩` | Popup openen of sluiten |
-| Typen | Zoeken |
+| Typen | Zoeken (`⌘V`, `⌘A`, `⌘C` en `⌘X` werken in het zoekveld) |
 | `↑` `↓` | Item kiezen |
 | `↩` of dubbelklik | Kopiëren en sluiten, daarna plakken met ⌘V |
 | Eén klik | Kopiëren, popup blijft open |
@@ -71,6 +71,7 @@ cd control-c
 - **Geen speciale toestemmingen.** De app gebruikt geen Toegankelijkheid, en kan dus niet in andere apps typen of uitlezen wat er in hun vensters staat. Om je toetsenbord netjes terug te geven als je hem boven Spotlight opent, kijkt hij of de zoekbalk van Spotlight in beeld is: hij ziet bij welke app elk venster hoort, nooit titels of inhoud. Bestanden die je kopieert leest hij alleen voor een miniatuur en tekstherkenning, en bestanden die alleen online staan (iCloud, Dropbox, OneDrive) laat hij met rust, zodat er niets wordt gedownload. Hij is gebouwd met de hardened runtime, zodat geen ander programma code in de app kan laden om de sleutel van je geschiedenis te lenen.
 - **Let op:** het herkennen van geheimen blijft een inschatting. Een woord met een getal erachter (`Zomer2026`), een wachtwoord van alleen letters, een wachtzin met spaties of streepjes, en alles na de eerste 64 KB van een kopie kunnen erdoorheen glippen. Zo'n item staat dan nog steeds versleuteld op schijf, en je verwijdert het met `⌘⌫`.
 - **Gebruik alleen een versie die je zelf hebt gebouwd.** Neem geen kant-en-klare `.app` van iemand anders over: die kun je niet controleren en hij ziet wel alles wat je kopieert.
+- **Klik nooit op "Altijd toestaan" voor een ander programma.** Vraagt macOS of een ander programma (zoals `security`) de *Control+C history key* mag gebruiken, klik dan op Weiger. Gebeurt het toch, dan merkt Control+C dat bij de volgende start en maakt de sleutel weer alleen voor zichzelf leesbaar.
 
 ## Sneltoets aanpassen
 
@@ -78,7 +79,7 @@ cd control-c
 
 ## Minder sleutelhanger-vragen na het bouwen (optioneel)
 
-De sleutelhanger geeft de sleutel van je geschiedenis alleen aan de app die hem maakte, herkend aan de handtekening. Zonder eigen certificaat krijgt elke `./build.sh` een nieuwe handtekening, en vraagt macOS opnieuw of Control+C de sleutel mag gebruiken. Maak je in Sleutelhangertoegang een eigen certificaat voor codeondertekening met de naam **Control+C Signing** (Certificaatassistent → Maak een certificaat aan → type *Codeondertekening*), dan gebruikt `build.sh` dat automatisch en komt die vraag niet terug.
+De sleutelhanger geeft de sleutel van je geschiedenis alleen aan de app die hem maakte, herkend aan de handtekening. Zonder eigen certificaat krijgt elke `./build.sh` een nieuwe handtekening, en vraagt macOS opnieuw of Control+C de sleutel mag gebruiken. Maak je in Sleutelhangertoegang een eigen certificaat voor codeondertekening met de naam **Control+C Signing** (Certificaatassistent → Maak een certificaat aan → type *Codeondertekening*), dan gebruikt `build.sh` dat automatisch en komt die vraag niet terug. Vraagt macOS tijdens het bouwen of `codesign` de sleutel van dat certificaat mag gebruiken, kies dan *Sta toe* en niet *Altijd toestaan*: met *Altijd toestaan* kan elk programma op je account zich als Control+C ondertekenen en zo bij de sleutel van je geschiedenis komen.
 
 ## Verwijderen
 
