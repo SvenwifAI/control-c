@@ -40,10 +40,10 @@ Requires **macOS 26 (Tahoe)** or later and the Xcode Command Line Tools:
 xcode-select --install
 ```
 
-Then build and install:
+Then build and install the released version (`v1.0` is a fixed, tested state; `main` can be ahead of it):
 
 ```bash
-git clone https://github.com/SvenwifAI/control-c.git
+git clone --branch v1.0 https://github.com/SvenwifAI/control-c.git
 cd control-c
 ./build.sh
 ```
@@ -87,8 +87,8 @@ You can drag the popup by any empty spot.
 
   Pasting a secret back marks it as concealed and keeps it off Universal Clipboard, so other clipboard tools and devices skip it. You can turn recognition off in Settings.
 - **Concealed copies are skipped** entirely: password managers such as 1Password mark what they copy as concealed or transient, and Control+C then keeps nothing of it.
-- **Excluded apps:** nothing you copy in apps you exclude in Settings is stored, including a copy made right before switching apps. Excluding an app also removes what it already added.
-- **Items expire after 7 days** without use, and at most 60 are kept (secrets don't count). Both are adjustable in Settings. Text over 1 MB and images over 20 MB or 50 megapixels are never stored. *Clear History* deletes every file and replaces the key, so old copies elsewhere can't be read either.
+- **Excluded apps:** password managers (Apple Passwords, Keychain Access, 1Password, Bitwarden, Dashlane, LastPass, KeePassXC, Enpass, Proton Pass, Strongbox) are excluded from the start, and you can add your own, such as your bank's app. Nothing you copy in an excluded app is stored, including a copy made right before switching apps. Excluding an app also removes what it already added.
+- **Items expire after 7 days** without use, and at most 60 are kept (secrets don't count). Both are adjustable in Settings. Text over 1 MB and images over 20 MB or 50 megapixels are never stored. *Clear History* deletes every file and replaces the key, so old copies elsewhere can't be read either; if that doesn't fully succeed, the app tells you and shows the folder.
 - **Hidden from screen sharing** by default: the popup asks macOS to be left out of screen sharing, recordings and screenshots. Most apps respect that; check yours before relying on it.
 - **No special permissions.** The app doesn't use Accessibility, so it can't type into other apps or read what's in their windows. To hand the keyboard back properly when you open it over Spotlight, it checks whether Spotlight's search bar is on screen: it sees which app each window belongs to, never titles or contents. Files you copy are only read for a thumbnail and text recognition, and online-only files (iCloud, Dropbox, OneDrive) are left alone so nothing gets downloaded. It is built with the hardened runtime, so no other program can load code into it to borrow its Keychain key.
 - **Heads-up:** recognizing secrets is a best guess. A word followed by a number (`Summer2026`), a password of only letters, a passphrase with spaces or dashes, and anything past the first 64 KB of a copy can slip through. Such an item is still encrypted on disk, and you can delete it with `⌘⌫`.

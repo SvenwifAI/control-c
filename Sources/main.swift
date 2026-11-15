@@ -659,7 +659,9 @@ final class ClipStore: ObservableObject {
 
     /// Removes every file of the history, also ones the app can't read right now, and replaces the
     /// key so copies of old files elsewhere (backups, snapshots) become unreadable.
-    func clear() {
+    /// Returns false when a file could not be deleted or the key could not be replaced.
+    @discardableResult
+    func clear() -> Bool {
         lastDeleted = nil
         items.removeAll()
         memoryImages.removeAll()
@@ -669,18 +671,21 @@ final class ClipStore: ObservableObject {
         saveScheduled = false
         io.sync {} // let pending writes finish before deleting
         #if DEMO
-        return // the demo must never touch the real history
+        return true // the demo must never touch the real history
         #endif
         let fm = FileManager.default
+        var complete = true
         for url in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
         where isOwnFile(url.lastPathComponent) {
-            try? fm.removeItem(at: url)
+            if (try? fm.removeItem(at: url)) == nil { complete = false }
         }
         if key != nil {
             key = Vault.rotateKey()
             isPersistent = key != nil
+            if key == nil { complete = false }
         }
         saveNow()
+        return complete
     }
 
     private func removeFile(of item: ClipItem) {
@@ -978,6 +983,7 @@ final class PickerModel: ObservableObject {
     var onChoose: (ClipItem, Bool) -> Void = { _, _ in }
     var onResize: () -> Void = {}
     var onOpenSettings: () -> Void = {}
+    var onClearFailed: () -> Void = {}
 
     init(store: ClipStore) {
         self.store = store
@@ -1069,7 +1075,7 @@ final class PickerModel: ObservableObject {
     }
 
     func clearAll() {
-        store.clear()
+        if !store.clear() { onClearFailed() }
         PreviewPane.forgetRendered()
         confirmingClear = false
         selection = 0
@@ -1828,6 +1834,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         model.onChoose = { [weak self] item, plain in self?.choose(item, plain: plain) }
         model.onResize = { [weak self] in self?.layoutPanel() }
         model.onOpenSettings = { [weak self] in self?.openSettings() }
+        model.onClearFailed = { [weak self] in self?.reportClearFailed() }
 
         hotKey = HotKey { [weak self] in self?.toggle() }
         registerShortcut()
@@ -2055,6 +2062,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     @objc func openFromMenu() { DispatchQueue.main.async { self.show() } }
+
+    /// Clearing must not fail silently: say so and show where the leftovers are.
+    func reportClearFailed() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = L("Not everything could be deleted")
+        alert.informativeText = L("Some files of your history are still on disk, or its key could not be replaced. Delete the files in the folder yourself.")
+        alert.addButton(withTitle: L("Show Folder"))
+        alert.addButton(withTitle: L("OK"))
+        NSApp.activate()
+        if alert.runModal() == .alertFirstButtonReturn { NSWorkspace.shared.activateFileViewerSelecting([store.dir]) }
+    }
 
     @objc func clearHistory() {
         let alert = NSAlert()

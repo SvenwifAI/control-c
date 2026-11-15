@@ -14,10 +14,10 @@ Je hebt nodig: macOS 26 (Tahoe) of nieuwer, en de Command Line Tools van Xcode.
 xcode-select --install
 ```
 
-Haal daarna de repo op en bouw de app:
+Haal daarna de uitgebrachte versie op en bouw de app (`v1.0` is een vaste, geteste stand; `main` kan daarop vooruitlopen):
 
 ```bash
-git clone https://github.com/SvenwifAI/control-c.git
+git clone --branch v1.0 https://github.com/SvenwifAI/control-c.git
 cd control-c
 ./build.sh
 ```
@@ -65,7 +65,7 @@ cd control-c
 
   Plak je een geheim terug, dan wordt het als geheim gemarkeerd en blijft het van het Universele klembord af, zodat andere klembordapps en apparaten het overslaan. Herkenning uitzetten kan in Instellingen.
 - **Gemarkeerde kopieën worden helemaal overgeslagen:** wachtwoordmanagers zoals 1Password markeren wat ze kopiëren als geheim of tijdelijk, en Control+C bewaart daar dan niets van.
-- **Uitgesloten apps:** wat je kopieert in apps die je in Instellingen uitsluit, wordt niet bewaard, ook niet als je vlak na het kopiëren van app wisselt. Een app uitsluiten haalt ook weg wat die app al had toegevoegd.
+- **Uitgesloten apps:** wachtwoordmanagers (Apple Wachtwoorden, Sleutelhangertoegang, 1Password, Bitwarden, Dashlane, LastPass, KeePassXC, Enpass, Proton Pass, Strongbox) zijn vanaf het begin uitgesloten, en je kunt zelf apps toevoegen, zoals die van je bank. Wat je in een uitgesloten app kopieert, wordt niet bewaard, ook niet als je vlak na het kopiëren van app wisselt. Een app uitsluiten haalt ook weg wat die app al had toegevoegd.
 - **Items verlopen na 7 dagen** zonder gebruik, en er worden hooguit 60 bewaard (geheimen tellen niet mee). Beide pas je aan in Instellingen. Tekst groter dan 1 MB en afbeeldingen groter dan 20 MB of 50 megapixel worden niet bewaard. *Geschiedenis wissen* verwijdert alle bestanden en vervangt de sleutel, zodat oude kopieën elders ook onleesbaar worden.
 - **Verborgen bij scherm delen** (standaard): de popup vraagt macOS om buiten scherm delen, opnames en screenshots te blijven. De meeste apps houden zich daaraan; controleer het in jouw app voordat je erop vertrouwt.
 - **Geen speciale toestemmingen.** De app gebruikt geen Toegankelijkheid, en kan dus niet in andere apps typen of uitlezen wat er in hun vensters staat. Om je toetsenbord netjes terug te geven als je hem boven Spotlight opent, kijkt hij of de zoekbalk van Spotlight in beeld is: hij ziet bij welke app elk venster hoort, nooit titels of inhoud. Bestanden die je kopieert leest hij alleen voor een miniatuur en tekstherkenning, en bestanden die alleen online staan (iCloud, Dropbox, OneDrive) laat hij met rust, zodat er niets wordt gedownload. Hij is gebouwd met de hardened runtime, zodat geen ander programma code in de app kan laden om de sleutel van je geschiedenis te lenen.

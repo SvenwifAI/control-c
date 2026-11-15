@@ -66,7 +66,7 @@
 "No apps excluded" = "Geen apps uitgesloten";
 "Add App…" = "App toevoegen…";
 "Excluded Apps" = "Uitgesloten apps";
-"Nothing you copy in these apps is ever stored. Useful for banking or a password file." = "Wat je in deze apps kopieert, wordt nooit bewaard. Handig voor bankieren of een wachtwoordbestand.";
+"Nothing you copy in these apps is ever stored. Password managers are excluded from the start." = "Wat je in deze apps kopieert wordt nooit bewaard. Wachtwoordmanagers zijn vanaf het begin uitgesloten.";
 "General" = "Algemeen";
 "Start at login" = "Start bij inloggen";
 "Exclude" = "Uitsluiten";
@@ -104,3 +104,8 @@
 "Paste" = "Plak";
 "Select All" = "Selecteer alles";
 "Window" = "Venster";
+
+"Not everything could be deleted" = "Niet alles kon worden gewist";
+"Some files of your history are still on disk, or its key could not be replaced. Delete the files in the folder yourself." = "Er staan nog bestanden van je geschiedenis op schijf, of de sleutel kon niet worden vervangen. Verwijder de bestanden in de map zelf.";
+"Show Folder" = "Toon map";
+"OK" = "OK";

@@ -97,6 +97,14 @@ final class Settings: ObservableObject {
             onDetectSecretsChange(detectSecrets)
         }
     }
+    /// Excluded until you remove them: password managers, as a safety net for copies they don't mark
+    /// as concealed themselves.
+    static let defaultExcludedApps = [
+        "com.apple.Passwords", "com.apple.keychainaccess",
+        "com.1password.1password", "com.agilebits.onepassword7", "com.bitwarden.desktop",
+        "com.dashlane.dashlanephonefinal", "com.lastpass.LastPass", "org.keepassxc.keepassxc",
+        "in.sinew.Enpass-Desktop", "me.proton.pass.electron", "com.markmcguill.strongbox.mac",
+    ]
     @Published var excludedApps: [String] {
         didSet {
             defaults.set(excludedApps, forKey: "excludedApps")
@@ -138,7 +146,7 @@ final class Settings: ObservableObject {
         hideWhenSharing = defaults.object(forKey: "hideWhenSharing") as? Bool ?? true
         recognizeText = defaults.object(forKey: "recognizeText") as? Bool ?? true
         detectSecrets = defaults.object(forKey: "detectSecrets") as? Bool ?? true
-        excludedApps = defaults.stringArray(forKey: "excludedApps") ?? []
+        excludedApps = defaults.stringArray(forKey: "excludedApps") ?? Self.defaultExcludedApps
     }
 }
 
@@ -235,17 +243,21 @@ struct SettingsView: View {
             }
 
             Section {
-                if settings.excludedApps.isEmpty {
+                // Default entries for apps that aren't installed stay excluded but aren't listed.
+                let shown = settings.excludedApps.filter {
+                    !Settings.defaultExcludedApps.contains($0) || NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) != nil
+                }
+                if shown.isEmpty {
                     Text("No apps excluded").foregroundStyle(.secondary)
                 }
-                ForEach(settings.excludedApps, id: \.self) { id in
+                ForEach(shown, id: \.self) { id in
                     ExcludedAppRow(bundleID: id) { settings.excludedApps.removeAll { $0 == id } }
                 }
                 Button("Add App…", action: addExcludedApp)
             } header: {
                 Text("Excluded Apps")
             } footer: {
-                Text("Nothing you copy in these apps is ever stored. Useful for banking or a password file.")
+                Text("Nothing you copy in these apps is ever stored. Password managers are excluded from the start.")
                     .foregroundStyle(.secondary)
             }
 
